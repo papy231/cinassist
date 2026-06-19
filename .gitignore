@@ -39,3 +39,23 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ─── Python (Backend) ───────────────────────────────────
+.venv/
+backend/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ─── Generierte Medien / Laufzeit-Daten (Backend) ───────
+backend/uploads/
+backend/proxies/
+backend/temp/
+backend/outputs/
+backend/thumbnails/
+backend/models/
+backend/data/
+
+# ─── DS_Store überall ───────────────────────────────────
+**/.DS_Store

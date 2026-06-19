@@ -1,0 +1,38 @@
+# CinAssist Backend — Abhängigkeiten
+
+# ─── Web-Framework ───────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.0
+python-multipart==0.0.9
+websockets==12.0
+
+# ─── Datenbank ───────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.35
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+
+# ─── Task Queue ──────────────────────────────────────────
+celery[redis]==5.4.0
+redis==5.0.8
+
+# ─── KI / ML (lokal auf Apple Silicon) ──────────────────
+mlx-whisper==0.4.0
+open-clip-torch==2.26.1
+torch==2.4.0
+torchvision==0.19.0
+pillow==10.4.0
+
+# ─── Video-Analyse ──────────────────────────────────────
+scenedetect[opencv]==0.6.4
+opencv-python-headless==4.10.0.84
+numpy==1.26.4
+
+# ─── HTTP Client (für Ollama + Cloud APIs) ──────────────
+httpx==0.27.2
+
+# ─── Cloud LLM Provider (optional) ──────────────────────
+# pip install anthropic          → Claude 3.5 Sonnet/Opus
+# pip install openai             → GPT-4o / o1
+# Gemini läuft via httpx (kein extra Paket nötig)
+anthropic>=0.40.0
+openai>=1.50.0
