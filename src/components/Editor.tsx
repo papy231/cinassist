@@ -10,6 +10,11 @@ import {
 } from "@/lib/timeline-model";
 import ClipWaveform from "@/components/ClipWaveform";
 import { planPlacement, hasCollision, findFreeTrack } from "@/lib/timeline-placement";
+import type { TimelineCmd, TimelineCommandExecutor } from "@/lib/timeline-commands";
+import { useProposalStore } from "@/lib/proposals";
+import { ProposalSplitsLayer, ProposalDeletesInRow } from "@/components/ProposalGhostLayers";
+import ChatPanel from "@/components/ChatPanel";
+import { useChatStore } from "@/lib/chat-store";
 
 // Sequence frame rate. The engine keeps time in integer frames; the existing
 // seconds-based edit model is converted to/from frames only at this edge.
@@ -251,6 +256,9 @@ export default function Editor() {
   const [tlClips, setTlClips] = useState<TLClip[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // KI-Agent Chat Panel — piloté par le bouton "KI-Agent" du footer.
+  const chatPanelOpen = useChatStore((s) => s.isOpen);
+  const toggleChatPanel = useChatStore((s) => s.toggle);
   // `playing` and `globalTime` are no longer React state: they are derived from
   // the playback engine below (isPlaying + currentFrame). The engine's
   // MasterClock is the single source of truth for time (golden rule).
@@ -953,7 +961,12 @@ export default function Editor() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Batch mode : quand vrai, snapshot() est un no-op → le batch entier occupe
+  // UN seul undo step (posé par executeBatch au début). Utilisé par l'agent IA
+  // et par tout consommateur du TimelineCommandExecutor.
+  const batchModeRef = useRef(false);
   const snapshot = () => {
+    if (batchModeRef.current) return;
     historyRef.current.push(tlClips);
     if (historyRef.current.length > 30) historyRef.current.shift();
     // Nouvelle action = redo buffer invalidé
@@ -2671,6 +2684,221 @@ export default function Editor() {
     toast(`Marker "${m.label}" bei ${fmtTC(t)}.`, "ok", 1800);
   };
 
+  /* ─── Timeline Command Executor ────────────────────────────────────────────
+     Contract API entre les 2 sources d'édition (humain via UI, agent IA via
+     Proposal). Fonctions pures pour les mutations tlClips → 1 seul setTlClips
+     par batch = 1 seul undo step. Enregistré dans le store Proposal. */
+  const applyCmdToClips = (clips: TLClip[], cmd: TimelineCmd): TLClip[] => {
+    switch (cmd.type) {
+      case "split": {
+        const targets = clips.filter((c) => {
+          if (cmd.clipTlIds && !cmd.clipTlIds.includes(c.tlId)) return false;
+          return cmd.at > c.start + 0.05 && cmd.at < c.start + c.duration - 0.05 && !isLocked(c.tlId);
+        });
+        let out = [...clips];
+        for (const clip of targets) {
+          const idx = out.findIndex((x) => x.tlId === clip.tlId);
+          if (idx === -1) continue;
+          const c = out[idx];
+          const cutLocal = cmd.at - c.start;
+          const linked = c.avLinked !== false;
+          const before: TLClip = { ...c, duration: cutLocal, avLinked: linked ? true : false, audioStart: linked ? undefined : c.start };
+          const afterStart = c.start + cutLocal;
+          const after: TLClip = {
+            ...c,
+            tlId: `${c.clipId}-${Date.now()}-${idx}-b`,
+            start: afterStart,
+            mediaStart: c.mediaStart + cutLocal,
+            duration: c.duration - cutLocal,
+            avLinked: linked ? true : false,
+            audioStart: linked ? undefined : afterStart,
+          };
+          out.splice(idx, 1, before, after);
+        }
+        return out;
+      }
+      case "delete": {
+        const removable = new Set(cmd.tlIds);
+        if (!cmd.ripple) return clips.filter((c) => !removable.has(c.tlId));
+        // Ripple : décale à gauche les clips suivant les supprimés, par piste V et A.
+        const removed = clips.filter((c) => removable.has(c.tlId)).sort((a, b) => a.start - b.start);
+        let working = clips.filter((c) => !removable.has(c.tlId));
+        for (const r of removed) {
+          const rvt = r.videoTrackIndex ?? 0;
+          const rat = r.hasAudio ? (r.audioTrackIndex ?? rvt) : null;
+          const cutEnd = r.start + r.duration;
+          working = working.map((c) => {
+            const cvt = c.videoTrackIndex ?? 0;
+            const cat = c.hasAudio ? (c.audioTrackIndex ?? cvt) : null;
+            const sameV = cvt === rvt;
+            const sameA = rat !== null && cat !== null && cat === rat;
+            if ((sameV || sameA) && c.start >= cutEnd - 0.001) return { ...c, start: Math.max(0, c.start - r.duration) };
+            return c;
+          });
+        }
+        return working;
+      }
+      case "deleteRange": {
+        // Étapes : (a) split at from + split at to sur tous les clips qui traversent
+        // [from, to] (et matchent tlIds si fourni), (b) collecte les clips-milieu
+        // résultants, (c) delete + optional ripple.
+        const from = Math.min(cmd.from, cmd.to);
+        const to = Math.max(cmd.from, cmd.to);
+        if (to - from < 0.02) return clips;
+        const filterTarget = (c: TLClip) => (!cmd.tlIds || cmd.tlIds.includes(c.tlId)) && !isLocked(c.tlId);
+        // (a) split at `from`
+        let out: TLClip[] = [...clips];
+        const applySplit = (arr: TLClip[], at: number): TLClip[] => {
+          const targets = arr.filter((c) => filterTarget(c) && at > c.start + 0.05 && at < c.start + c.duration - 0.05);
+          let acc = arr;
+          for (const clip of targets) {
+            const idx = acc.findIndex((x) => x.tlId === clip.tlId);
+            if (idx === -1) continue;
+            const c = acc[idx];
+            const cutLocal = at - c.start;
+            const linked = c.avLinked !== false;
+            const before: TLClip = { ...c, duration: cutLocal, avLinked: linked ? true : false, audioStart: linked ? undefined : c.start };
+            const afterStart = c.start + cutLocal;
+            const after: TLClip = {
+              ...c,
+              tlId: `${c.clipId}-${Date.now()}-${idx}-${Math.round(at * 1000)}-b`,
+              start: afterStart,
+              mediaStart: c.mediaStart + cutLocal,
+              duration: c.duration - cutLocal,
+              avLinked: linked ? true : false,
+              audioStart: linked ? undefined : afterStart,
+            };
+            acc = acc.slice();
+            acc.splice(idx, 1, before, after);
+          }
+          return acc;
+        };
+        out = applySplit(out, from);
+        out = applySplit(out, to);
+        // (b) collecte les clips-milieu (start >= from-eps ET end <= to+eps ET matchTarget)
+        const toRemove = new Set<string>();
+        for (const c of out) {
+          if (!filterTarget(c)) continue;
+          const cEnd = c.start + c.duration;
+          if (c.start >= from - 0.02 && cEnd <= to + 0.02) toRemove.add(c.tlId);
+        }
+        if (toRemove.size === 0) return out;
+        // (c) delete + ripple
+        return applyCmdToClips(out, { type: "delete", tlIds: [...toRemove], ripple: cmd.ripple });
+      }
+      case "setFade":
+        return clips.map((c) => c.tlId !== cmd.tlId ? c : {
+          ...c,
+          [cmd.side === "in" ? "fadeIn" : "fadeOut"]: cmd.duration > 0.02 ? cmd.duration : undefined,
+          [cmd.side === "in" ? "fadeInCurve" : "fadeOutCurve"]: cmd.curve && Math.abs(cmd.curve) > 0.03 ? cmd.curve : undefined,
+        });
+      case "setGain":
+        return clips.map((c) => c.tlId !== cmd.tlId ? c : { ...c, gainDb: Math.abs(cmd.gainDb) < 0.05 ? undefined : cmd.gainDb });
+      case "move":
+      case "trim":
+      case "insert":
+        // TODO ticket futur (nécessite une refonte de placement + reflow)
+        console.warn("[executor] cmd non encore implémentée :", cmd.type);
+        return clips;
+      default:
+        return clips;
+    }
+  };
+
+  const applyNonClipCmd = (cmd: TimelineCmd) => {
+    switch (cmd.type) {
+      case "addMarker":
+        setMarkers((cur) => [...cur, { id: `m-${Date.now()}`, time: cmd.at, label: cmd.label }].sort((a, b) => a.time - b.time));
+        break;
+      case "setRange":
+        setInPoint(cmd.inPoint);
+        setOutPoint(cmd.outPoint);
+        break;
+    }
+  };
+
+  const executor: TimelineCommandExecutor = {
+    execute: (cmd) => {
+      snapshot();
+      if (cmd.type === "addMarker" || cmd.type === "setRange") applyNonClipCmd(cmd);
+      else setTlClips((cur) => applyCmdToClips(cur, cmd));
+    },
+    executeBatch: (batch, label) => {
+      if (batch.length === 0) return;
+      snapshot();
+      batchModeRef.current = true;
+      try {
+        const clipCmds = batch.filter((c) => c.type !== "addMarker" && c.type !== "setRange");
+        const nonClipCmds = batch.filter((c) => c.type === "addMarker" || c.type === "setRange");
+        if (clipCmds.length > 0) {
+          setTlClips((cur) => clipCmds.reduce((acc, cmd) => applyCmdToClips(acc, cmd), cur));
+        }
+        for (const cmd of nonClipCmds) applyNonClipCmd(cmd);
+      } finally {
+        batchModeRef.current = false;
+      }
+      toast(`${label}: ${batch.length} Aktion${batch.length > 1 ? "en" : ""}`, "ok", 2000);
+    },
+    canExecute: (cmd) => {
+      switch (cmd.type) {
+        case "split":
+          if (cmd.at < 0 || cmd.at > totalDuration) return { ok: false, reason: "Position hors timeline" };
+          return { ok: true };
+        case "delete":
+          if (cmd.tlIds.length === 0) return { ok: false, reason: "Aucun clip à supprimer" };
+          for (const id of cmd.tlIds) if (!tlClips.find((c) => c.tlId === id)) return { ok: false, reason: `Clip ${id} introuvable` };
+          return { ok: true };
+        case "deleteRange":
+          if (cmd.to - cmd.from < 0.02) return { ok: false, reason: "Bereich zu klein" };
+          if (cmd.from < 0 || cmd.to > totalDuration) return { ok: false, reason: "Bereich hors timeline" };
+          return { ok: true };
+        case "setFade":
+        case "setGain":
+        case "trim":
+        case "move":
+          if (!tlClips.find((c) => c.tlId === cmd.tlId)) return { ok: false, reason: `Clip ${cmd.tlId} introuvable` };
+          return { ok: true };
+        default:
+          return { ok: true };
+      }
+    },
+    getSnapshot: () => ({
+      totalDuration,
+      fps: PROJECT_FPS,
+      numVideoTracks,
+      numAudioTracks,
+      playheadTime: globalTime,
+      selectedTlIds: [...selectedTlIds],
+      clips: tlClips.map((c) => ({
+        tlId: c.tlId,
+        clipId: c.clipId,
+        name: c.name,
+        start: c.start,
+        duration: c.duration,
+        mediaStart: c.mediaStart,
+        videoTrackIndex: c.videoTrackIndex,
+        audioTrackIndex: c.audioTrackIndex,
+        hasAudio: c.hasAudio,
+      })),
+    }),
+  };
+
+  // Enregistre l'executor dans le store Proposal — l'agent (via addProposal +
+  // acceptProposal) pourra pousser des batches par ce canal. Un handle global
+  // est aussi exposé pour tester depuis la console : `__cinassistExecutor`.
+  useEffect(() => {
+    useProposalStore.getState().registerExecutor(executor);
+    if (typeof window !== "undefined") {
+      const w = window as unknown as { __cinassistExecutor: TimelineCommandExecutor; __cinassistProposalStore: typeof useProposalStore };
+      w.__cinassistExecutor = executor;
+      w.__cinassistProposalStore = useProposalStore;
+    }
+    return () => {
+      useProposalStore.getState().registerExecutor(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
+
   /* ─── Menu contextuel (#3) ─── */
   const openMenuAt = (x: number, y: number, items: MenuItem[]) => {
     const W = 210;
@@ -3185,7 +3413,7 @@ export default function Editor() {
                 <button style={item} onClick={menuAction(zoomFit)}>Anpassen {kbd("Cmd 0")}</button>
                 <div style={sep} />
                 <button style={item} onClick={menuAction(toggleFullscreen)}>Vollbild {kbd("F")}</button>
-                <button style={item} onClick={menuAction(() => setAiOpen((o) => !o))}>KI-Panel umschalten</button>
+                <button style={item} onClick={menuAction(toggleChatPanel)}>KI-Panel umschalten</button>
                 <button style={item} onClick={menuAction(() => setHistOpen((o) => !o))}>Verlauf umschalten</button>
               </>},
             ];
@@ -3304,9 +3532,9 @@ export default function Editor() {
                 style={{ width: 38, height: 36, borderRadius: 9, background: markers.length > 0 ? "#3a2d0d" : "#1c1c1e", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <S c={markers.length > 0 ? "#e0b84a" : "#c9c9c9"}><path d="M15 4l5 5M17 6L7.5 15.5 4 20l4.5-.5L18 10" /></S>
               </button>
-              <button onClick={() => setAiOpen((o) => !o)} title="KI-Agent"
-                style={{ width: 38, height: 36, borderRadius: 9, background: aiOpen ? "#3a2a5a" : "#1c1c1e", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <S c={aiOpen ? "#c9a4ff" : "#c9c9c9"}><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z" /></S>
+              <button onClick={toggleChatPanel} title="KI-Agent"
+                style={{ width: 38, height: 36, borderRadius: 9, background: chatPanelOpen ? "#e5c100" : "#1c1c1e", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: chatPanelOpen ? "0 0 0 1px rgba(0,0,0,0.4), 0 2px 8px rgba(229,193,0,0.4)" : "none" }}>
+                <S c={chatPanelOpen ? "#000" : "#c9c9c9"}><path d="M5 3v4M3 5h4M6 17v4M4 19h4M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z" /></S>
               </button>
               <button onClick={() => { setTab("color"); toast("Farbe-Modus — Farbrad-Tools folgen.", "info", 2500); }} title="Farbrad"
                 style={{ width: 38, height: 36, borderRadius: 9, background: tab === "color" ? "#1a3a3e" : "#1c1c1e", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -4276,6 +4504,8 @@ export default function Editor() {
                 </div>
               ));
             })()}
+            {/* Ghost overlay pour deletes proposés sur cette piste vidéo. */}
+            <ProposalDeletesInRow tlClips={tlClips} kind="v" trackIndex={ti} clipToPct={clipToPct} clipWidthPct={clipWidthPct} />
             {/* #2 : poignée de redimensionnement PAR piste (bord inférieur) */}
             {trackResizeHandle(`v${ti}`, "v")}
             </div>
@@ -4478,11 +4708,15 @@ export default function Editor() {
                 </div>
               );
             })}
+            {/* Ghost overlay pour deletes proposés sur cette piste audio. */}
+            <ProposalDeletesInRow tlClips={tlClips} kind="a" trackIndex={ti} clipToPct={clipToPct} clipWidthPct={clipWidthPct} />
             {/* #2 : poignée de redimensionnement PAR piste audio (bord inférieur) */}
             {trackResizeHandle(`a${ti}`, "a")}
             </div>
             );
           })}
+          {/* Ghost overlay pour splits proposés — lignes verticales qui traversent toutes les rows. */}
+          <ProposalSplitsLayer totalDuration={totalDuration} />
 
           {/* Drop-Preview (DaVinci-style) : ghost du clip pendant le drag depuis
               Medien, positionné sur la row cible avec la bonne largeur. Affiche
@@ -4636,8 +4870,8 @@ export default function Editor() {
             );
           })}
         </div>
-        <button onClick={() => setAiOpen((o) => !o)}
-          style={{ display: "flex", alignItems: "center", gap: 8, background: aiOpen ? "#3a2a5a" : "#242426", borderRadius: 8, height: 34, padding: "0 14px", fontSize: 13, color: aiOpen ? "#c9a4ff" : "#cfcfcf" }}>
+        <button onClick={toggleChatPanel}
+          style={{ display: "flex", alignItems: "center", gap: 8, background: chatPanelOpen ? "#e5c100" : "#242426", borderRadius: 8, height: 34, padding: "0 14px", fontSize: 13, color: chatPanelOpen ? "#000" : "#cfcfcf", fontWeight: chatPanelOpen ? 600 : 400, boxShadow: chatPanelOpen ? "0 0 0 1px rgba(0,0,0,0.4), 0 2px 8px rgba(229,193,0,0.4)" : "none" }}>
           <S w={15} c="currentColor" sw={1.7}><path d="M13 3l2.5 6.5L22 12l-6.5 2.5L13 21l-2.5-6.5L4 12l6.5-2.5z" /></S>KI-Agent
         </button>
         <button onClick={() => setHistOpen((o) => !o)} style={{ display: "flex", alignItems: "center", gap: 8, background: "#242426", borderRadius: 8, height: 34, padding: "0 14px", fontSize: 13, color: "#cfcfcf" }}>
@@ -4960,6 +5194,9 @@ export default function Editor() {
       )}
 
       <style>{`@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }`}</style>
+
+      {/* KI-Schnittassistent — floating chat panel + FAB. */}
+      <ChatPanel />
     </div>
   );
 }

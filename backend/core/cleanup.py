@@ -82,6 +82,7 @@ def remove_silences_from_scenes(
     margin = keep_margin_ms / 1000.0
 
     all_segments: list[dict] = []
+    all_silences: list[dict] = []  # intervalles retirés (pour visualisation timeline)
     total_original = 0.0
     scenes_no_speech = 0
 
@@ -114,11 +115,13 @@ def remove_silences_from_scenes(
                 merged[-1]["end"] = seg["end"]
 
         # Ajouter marge autour de chaque merged span
+        kept_spans: list[dict] = []
         for m in merged:
             m_start = max(scene_start, m["start"] - margin)
             m_end = min(scene_end, m["end"] + margin)
             if m_end <= m_start:
                 continue
+            kept_spans.append({"start": m_start, "end": m_end})
             all_segments.append({
                 "clip_path": clip_path,
                 "clip_name": clip_name,
@@ -128,9 +131,39 @@ def remove_silences_from_scenes(
                 "src_type": "speech",
             })
 
+        # Silences = complément des kept_spans dans [scene_start, scene_end].
+        # Utilisé côté frontend pour dessiner les fantômes deleteRange sur la
+        # timeline (visualisation HITL). NB : les kept_spans peuvent se recouvrir
+        # après application de la margin — on fusionne avant de calculer.
+        if kept_spans:
+            kept_sorted = sorted(kept_spans, key=lambda x: x["start"])
+            fused: list[dict] = [kept_sorted[0].copy()]
+            for span in kept_sorted[1:]:
+                if span["start"] <= fused[-1]["end"]:
+                    fused[-1]["end"] = max(fused[-1]["end"], span["end"])
+                else:
+                    fused.append(span.copy())
+
+            def _add_silence(start: float, end: float) -> None:
+                if end - start < 0.05:
+                    return
+                all_silences.append({
+                    "clip_path": clip_path,
+                    "clip_name": clip_name,
+                    "media_start": round(start, 3),
+                    "duration": round(end - start, 3),
+                    "src_scene_id": str(scene_id),
+                })
+
+            _add_silence(scene_start, fused[0]["start"])
+            for i in range(len(fused) - 1):
+                _add_silence(fused[i]["end"], fused[i + 1]["start"])
+            _add_silence(fused[-1]["end"], scene_end)
+
     cleaned_dur = sum(s["duration"] for s in all_segments)
     return {
         "segments": all_segments,
+        "silences": all_silences,
         "original_duration_s": round(total_original, 2),
         "cleaned_duration_s": round(cleaned_dur, 2),
         "silence_removed_s": round(total_original - cleaned_dur, 2),

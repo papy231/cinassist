@@ -437,16 +437,17 @@ async def _tool_remove_silences(args: dict, db: AsyncSession) -> dict:
     result = remove_silences_from_scenes(
         scenes, min_silence_ms=min_silence_ms, keep_margin_ms=keep_margin_ms
     )
-    # Truncate segments in observation to avoid huge payloads
-    truncated = result.copy()
-    truncated["segment_count"] = len(truncated["segments"])
-    truncated["segments_preview"] = truncated["segments"][:5]
-    del truncated["segments"]
+    # On garde `segments` complet dans le return (le frontend proxy en a besoin
+    # pour construire les deleteRange précis). Le prompt LLM tronque de toute
+    # façon les observations à 2000 chars → pas de pollution du context.
+    out = result.copy()
+    out["segment_count"] = len(out["segments"])
+    out["segments_preview"] = out["segments"][:5]
     # Attach a stash key so export_scenes can pull the full segments back
     await _stash_write(args.get("_stash_id", "last"), result["segments"], db)
-    truncated["stash_id"] = "last"
-    truncated["_hint"] = "Call export_scenes with {segments: <segments from previous obs>} to export."
-    return truncated
+    out["stash_id"] = "last"
+    out["_hint"] = "Call export_scenes with {segments: <segments from previous obs>} to export."
+    return out
 
 
 async def _tool_find_hesitations(args: dict, db: AsyncSession) -> dict:
@@ -1222,14 +1223,75 @@ TOOLS: dict[str, Tool] = {
 
 
 # ─── System prompt ───────────────────────────────────────────
-def _build_system_prompt() -> str:
+def _build_system_prompt(timeline_state: dict | None = None) -> str:
     tools_desc = []
     for t in TOOLS.values():
         args_str = ", ".join(f"{k}: {v}" for k, v in t.args_schema.items()) or "aucun"
         tools_desc.append(f"- {t.name}({args_str})\n    {t.description}")
     tools_block = "\n".join(tools_desc)
 
-    return f"""Du bist CinAssist, ein KI-Agent für Video-Postproduktion. Du hilfst Profi-Cuttern, Routinearbeiten zu automatisieren (Sichtung/Dérushage, Plansuche, Cleanup, Rohschnitt).
+    # Snapshot de la timeline actuelle (envoyé par le frontend). Permet à l'agent
+    # de raisonner sur "aktueller Clip", "V1", "der erste Clip" sans avoir à
+    # appeler list_clips systématiquement.
+    tl_block = ""
+    if timeline_state and isinstance(timeline_state, dict):
+        clips = timeline_state.get("clips") or []
+        total = timeline_state.get("totalDuration") or 0
+        n_v = timeline_state.get("numVideoTracks") or 0
+        n_a = timeline_state.get("numAudioTracks") or 0
+        playhead = timeline_state.get("playheadTime") or 0
+        selected_ids = timeline_state.get("selectedTlIds") or []
+        if clips:
+            def _resolve_current_clips() -> list[dict]:
+                # Priorité 1 : les clips sélectionnés (selectedTlIds)
+                if selected_ids:
+                    sel = [c for c in clips if c.get("tlId") in selected_ids]
+                    if sel:
+                        return sel
+                # Priorité 2 : le clip sous le playhead (piste vidéo de priorité la + haute)
+                at_ph = [
+                    c for c in clips
+                    if c.get("start", 0) <= playhead <= c.get("start", 0) + c.get("duration", 0)
+                ]
+                if at_ph:
+                    at_ph.sort(key=lambda c: c.get("videoTrackIndex", 0))
+                    return [at_ph[0]]
+                return []
+
+            current = _resolve_current_clips()
+            current_note = ""
+            if current:
+                names = ", ".join(c.get("name") or c.get("clipId") or "?" for c in current)
+                ids = ", ".join(c.get("clipId") or "?" for c in current)
+                current_note = (
+                    f"\n>>> AKTUELLER CLIP (dieser ist gemeint wenn Nutzer 'aktueller Clip' / 'dieser Clip' sagt): "
+                    f"{names}  (clipId(s): {ids})"
+                )
+
+            lines = []
+            for c in clips[:40]:
+                v_idx = c.get("videoTrackIndex", 0) or 0
+                start = c.get("start", 0)
+                dur = c.get("duration", 0)
+                name = c.get("name") or c.get("clipId") or "?"
+                marker = " ← SELECTED" if c.get("tlId") in selected_ids else ""
+                lines.append(
+                    f"  - V{int(v_idx)+1}: {name} @ {start:.2f}s → {start+dur:.2f}s (dur {dur:.2f}s, clipId={c.get('clipId')}){marker}"
+                )
+            more = f"\n  … ({len(clips) - 40} weitere Clips)" if len(clips) > 40 else ""
+            tl_block = (
+                "\n\n=== Aktuelle Timeline des Nutzers (Kontext) ===\n"
+                f"Gesamtdauer: {total:.2f}s · {n_v} V-Spur(en), {n_a} A-Spur(en) · {len(clips)} Clip(s) · "
+                f"Playhead @ {playhead:.2f}s"
+                f"{current_note}\n"
+                f"Clips auf der Timeline:\n" + "\n".join(lines) + more +
+                "\n\nWICHTIG: Wenn der Nutzer 'aktueller Clip', 'dieser Clip' oder 'auf der Timeline' sagt, "
+                "beziehe dich AUSSCHLIESSLICH auf den oben markierten 'AKTUELLER CLIP'. "
+                "Nutze seine `clipId` als Argument für tools (z. B. remove_silences {clip_ids: [<clipId>]}). "
+                "KEIN list_clips-Aufruf nötig — du hast die IDs bereits."
+            )
+
+    return f"""Du bist CinAssist, ein KI-Agent für Video-Postproduktion. Du hilfst Profi-Cuttern, Routinearbeiten zu automatisieren (Sichtung/Dérushage, Plansuche, Cleanup, Rohschnitt).{tl_block}
 
 Du antwortest AUSSCHLIESSLICH in gültigem JSON, niemals Freitext außerhalb des JSON.
 
@@ -1292,9 +1354,9 @@ async def _call_ollama(prompt: str) -> tuple[dict, dict]:
 
 
 # ─── ReAct loop ──────────────────────────────────────────────
-async def _run_agent(user_prompt: str, db: AsyncSession):
+async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | None = None):
     """Générateur async : yield chaque étape (thought/action/observation/done) au fur et à mesure."""
-    system = _build_system_prompt()
+    system = _build_system_prompt(timeline_state)
     trace_lines = [f"UTILISATEUR: {user_prompt}"]
 
     unknown_tool_streak = 0
@@ -1395,6 +1457,10 @@ async def _run_agent(user_prompt: str, db: AsyncSession):
 # ─── HTTP endpoint (SSE streaming) ───────────────────────────
 class AgentRunRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="Anfrage des Nutzers in natürlicher Sprache")
+    timeline_state: dict | None = Field(
+        None,
+        description="Snapshot der aktuellen Timeline (clips, videoTrackIndex, start, duration). Vom Frontend geschickt für Kontext.",
+    )
 
 
 @router.post("/run")
@@ -1404,7 +1470,7 @@ async def run_agent_stream(req: AgentRunRequest, db: AsyncSession = Depends(get_
     (thought / action / observation / done).
     """
     async def event_gen():
-        async for evt in _run_agent(req.prompt, db):
+        async for evt in _run_agent(req.prompt, db, req.timeline_state):
             yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
@@ -1414,7 +1480,7 @@ async def run_agent_stream(req: AgentRunRequest, db: AsyncSession = Depends(get_
 async def run_agent_sync(req: AgentRunRequest, db: AsyncSession = Depends(get_db)) -> dict:
     """Version non-streaming pour tests CLI : renvoie la trace complète en une fois."""
     trace = []
-    async for evt in _run_agent(req.prompt, db):
+    async for evt in _run_agent(req.prompt, db, req.timeline_state):
         trace.append(evt)
     final = next((e["content"] for e in reversed(trace) if e["type"] == "done"), None)
     return {"final_answer": final, "trace": trace, "step_count": len(trace)}
