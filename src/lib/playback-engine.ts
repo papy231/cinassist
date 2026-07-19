@@ -391,6 +391,29 @@ export class PlaybackEngine {
     this.clock.seek(frame);
   }
 
+  private scrubTimer: number | null = null;
+
+  /**
+   * Scrub audio kick — briefly plays the active <video> for `ms` milliseconds
+   * without touching the master clock. Called from the UI's mousemove during a
+   * playhead drag to let the user hear the audio at the scrubbed position.
+   * Safe to call rapidly: subsequent kicks reset the auto-pause timer.
+   */
+  scrubAudioKick(ms: number = 80) {
+    const v = this.pool.active;
+    if (!v || v.readyState < 2) return;
+    if (this.masterMuted) return;
+    // Unmute + master volume (no fade/gain multipliers during scrub — safest).
+    v.muted = false;
+    v.volume = this.masterVolume;
+    v.play().catch(() => {});
+    if (this.scrubTimer !== null) window.clearTimeout(this.scrubTimer);
+    this.scrubTimer = window.setTimeout(() => {
+      if (this.pool.active === v && !this.clock.playing) v.pause();
+      this.scrubTimer = null;
+    }, ms);
+  }
+
   /**
    * Push per-track UI state (hidden/solo/mute), keyed by video-track id. The
    * map is stored wholesale (consumers build a fresh Map each change) and the
@@ -524,6 +547,50 @@ export class PlaybackEngine {
     // warmed up-front — no per-tick preload needed for the common case.
     void this.preloadLookahead;
 
+    // Audio mix (audio-only) : fade ramp × clip gain (dB → multiplier).
+    // Opacity is not touched — video fades are a separate feature.
+    if (this.pool.active && !trackMuted && !this.masterMuted) {
+      const fadeMult = computeFadeMultiplier(t, active.clip);
+      const gainMult = active.clip.gainDb != null && active.clip.gainDb !== 0
+        ? Math.pow(10, active.clip.gainDb / 20)
+        : 1;
+      const mult = fadeMult * gainMult;
+      if (mult !== 1) {
+        this.pool.active.volume = Math.max(0, Math.min(1, this.masterVolume * mult));
+      }
+    }
+
     this.onFrame(t);
   }
+}
+
+/**
+ * Linear fade multiplier [0,1] for a clip at timeline frame `t`. Uses fadeIn /
+ * fadeOut declared on the EngineClip (if any). Returns 1 when the playhead is
+ * outside both ramps.
+ */
+function computeFadeMultiplier(t: Frames, clip: EngineClip): number {
+  // Power curve: x^(2^curve). curve=0 → linear, curve>0 → ease-in (slow start),
+  // curve<0 → ease-out (fast start).
+  const shape = (x: number, curve?: number) => {
+    if (!curve) return x;
+    const p = Math.pow(2, Math.max(-1, Math.min(1, curve)));
+    return Math.pow(x, p);
+  };
+  let mult = 1;
+  if (clip.fadeInFrames && clip.fadeInFrames > 0) {
+    const pos = t - clip.timelineStart;
+    if (pos < clip.fadeInFrames) {
+      const x = Math.max(0, pos / clip.fadeInFrames);
+      mult = shape(x, clip.fadeInCurve);
+    }
+  }
+  if (clip.fadeOutFrames && clip.fadeOutFrames > 0) {
+    const posFromEnd = clip.timelineStart + clip.duration - t;
+    if (posFromEnd < clip.fadeOutFrames) {
+      const x = Math.max(0, posFromEnd / clip.fadeOutFrames);
+      mult = Math.min(mult, shape(x, clip.fadeOutCurve));
+    }
+  }
+  return mult;
 }

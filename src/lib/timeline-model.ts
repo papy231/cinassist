@@ -26,6 +26,16 @@ export interface EngineClip {
   timelineStart: Frames;
   /** Duration on the timeline (frames). No sourceOut: it is derived. */
   duration: Frames;
+  /** Fade-in ramp length (frames). Applied to opacity + volume linearly from 0 to 1. */
+  fadeInFrames?: Frames;
+  /** Fade-out ramp length (frames). Applied to opacity + volume linearly from 1 to 0. */
+  fadeOutFrames?: Frames;
+  /** Fade-in curve factor in [-1, 1]. 0 = linear, +1 = ease-in (slow start), -1 = ease-out. */
+  fadeInCurve?: number;
+  /** Fade-out curve factor in [-1, 1]. Same convention as fadeInCurve. */
+  fadeOutCurve?: number;
+  /** Constant clip gain in decibels. 0 dB = unity. Multiplies volume on top of master + fades. */
+  gainDb?: number;
 }
 
 /** Clips sorted by timelineStart, no overlap. Enforced by normalize(). */
@@ -86,6 +96,16 @@ export type TLClip = {
   videoTrackIndex?: number;
   /** Which audio track this clip's audio lives on. Defaults to videoTrackIndex. */
   audioTrackIndex?: number;
+  /** Fade-in ramp length (seconds). Applied to opacity + volume. */
+  fadeIn?: number;
+  /** Fade-out ramp length (seconds). Applied to opacity + volume. */
+  fadeOut?: number;
+  /** Fade-in curve shape in [-1, 1]. 0 = linear. */
+  fadeInCurve?: number;
+  /** Fade-out curve shape in [-1, 1]. 0 = linear. */
+  fadeOutCurve?: number;
+  /** Clip-level gain in dB (rubber band). 0 dB = unity. */
+  gainDb?: number;
 };
 
 /**
@@ -139,13 +159,25 @@ export function tlClipsToEngineTracks(
     const endF = secondsToFrames(c.start + c.duration, fps);
     const vIdx = clampIdx(c.videoTrackIndex ?? 0, numVideoTracks);
     const aIdx = clampIdx(c.audioTrackIndex ?? c.videoTrackIndex ?? 0, numAudioTracks);
+    const clipDurF = endF - startF;
+    const fadeInF = c.fadeIn && c.fadeIn > 0 ? Math.min(clipDurF, secondsToFrames(c.fadeIn, fps)) : undefined;
+    const fadeOutF = c.fadeOut && c.fadeOut > 0 ? Math.min(clipDurF, secondsToFrames(c.fadeOut, fps)) : undefined;
+    const clampCurve = (v: number) => Math.max(-1, Math.min(1, v));
+    const fadeInCurve = c.fadeInCurve != null ? clampCurve(c.fadeInCurve) : undefined;
+    const fadeOutCurve = c.fadeOutCurve != null ? clampCurve(c.fadeOutCurve) : undefined;
+    const gainDb = c.gainDb != null ? Math.max(-48, Math.min(24, c.gainDb)) : undefined;
     built.push({
       clip: {
         id: c.tlId,
         src,
         sourceIn: secondsToFrames(c.mediaStart, fps),
         timelineStart: startF,
-        duration: endF - startF,
+        duration: clipDurF,
+        ...(fadeInF ? { fadeInFrames: fadeInF } : {}),
+        ...(fadeOutF ? { fadeOutFrames: fadeOutF } : {}),
+        ...(fadeInCurve ? { fadeInCurve } : {}),
+        ...(fadeOutCurve ? { fadeOutCurve } : {}),
+        ...(gainDb ? { gainDb } : {}),
       },
       vIdx,
       aIdx,
