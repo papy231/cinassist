@@ -1,7 +1,7 @@
 """CinAssist — Celery App"""
 
 from celery import Celery
-from backend.core.config import CELERY_BROKER_URL, CELERY_RESULT_BACKEND
+from backend.core.config import CELERY_BROKER_URL, CELERY_RESULT_BACKEND, TIMEZONE
 
 celery_app = Celery(
     "cinassist",
@@ -14,7 +14,7 @@ celery_app.conf.update(
     task_serializer="json",
     result_serializer="json",
     accept_content=["json"],
-    timezone="Europe/Berlin",
+    timezone=TIMEZONE,
     enable_utc=True,
     task_track_started=True,
     worker_prefetch_multiplier=1,      # ein Task pro Worker (KI-lastig)

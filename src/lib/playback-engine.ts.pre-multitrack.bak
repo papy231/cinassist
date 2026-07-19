@@ -1,0 +1,425 @@
+/**
+ * CinAssist playback engine — Layer 2 (MasterClock) + Layer 3 (compositor).
+ *
+ * Golden rule: the timeline is the ONLY source of truth. The MasterClock
+ * produces `t` (frames). Playhead, <video> elements, everything follows `t`
+ * — never the reverse. The <video> never drives timeline state.
+ *
+ * Adapted from the skill reference:
+ * .claude/skills/cinassist-nle-architecture/assets/playback-engine.ts
+ *
+ * Framework-agnostic: no React in here. Hooks come in Phase 2.
+ */
+
+import {
+  type Frames,
+  type EngineClip,
+  type EngineTrack,
+  type EngineTimeline,
+  framesToSeconds,
+} from "./timeline-model";
+
+// ─── Clip resolver (pure — THE fundamental mapping) ────────────────
+
+export interface ActiveClip {
+  clip: EngineClip;
+  /** Wanted time IN THE SOURCE MEDIA (frames). */
+  sourceFrame: Frames;
+}
+
+/**
+ * For a track and timeline time `t`: the active clip and its source frame,
+ * or null (= real gap in the timeline → intentional black).
+ */
+export function resolveClipAt(track: EngineTrack, t: Frames): ActiveClip | null {
+  for (const clip of track.clips) {
+    const start = clip.timelineStart;
+    const end = clip.timelineStart + clip.duration;
+    if (t >= start && t < end) {
+      return { clip, sourceFrame: clip.sourceIn + (t - start) };
+    }
+  }
+  return null;
+}
+
+// ─── Master clock (drives EVERYTHING, via rAF) ─────────────────────
+
+/**
+ * One clock for the whole app. Advances on wall time (`performance.now()`)
+ * during playback — not a per-frame counter, which would accumulate error.
+ * The UI playhead reads `currentFrame`; it NEVER reads `video.currentTime`.
+ */
+export class MasterClock {
+  currentFrame: Frames = 0;
+  playing = false;
+
+  private raf = 0;
+  private wallStart = 0;
+  private frameStart = 0;
+  private fps: number;
+
+  /** Called every rAF tick with the current time. */
+  onTick: (frame: Frames) => void = () => {};
+
+  constructor(fps: number) {
+    this.fps = fps;
+  }
+
+  play() {
+    if (this.playing) return;
+    this.playing = true;
+    this.wallStart = performance.now();
+    this.frameStart = this.currentFrame;
+
+    const loop = (now: number) => {
+      if (!this.playing) return;
+      const elapsedSec = (now - this.wallStart) / 1000;
+      this.currentFrame = this.frameStart + elapsedSec * this.fps;
+      this.onTick(this.currentFrame);
+      this.raf = requestAnimationFrame(loop);
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+
+  pause() {
+    this.playing = false;
+    cancelAnimationFrame(this.raf);
+  }
+
+  /** Scrub / timeline click: move `t`, everything follows. */
+  seek(frame: Frames) {
+    this.currentFrame = frame;
+    this.frameStart = frame;
+    this.wallStart = performance.now();
+    this.onTick(frame); // immediate render, even while paused
+  }
+}
+
+// ─── Video pool (kills black frames via preloading) ────────────────
+
+export interface EngineMediaError {
+  /** src of the media that failed. */
+  src: string;
+  mediaError: MediaError | null;
+}
+
+/**
+ * Multi-slot video pool: ONE `<video>` element per unique clip.src in the
+ * timeline. All slots are preloaded + seeked to their entry point when the
+ * timeline is warmed → arbitrary seek across clips = swap opacity, ZERO
+ * load latency. Trade-off: memory scales with the number of unique clips
+ * (~5–20 MB per element, well within browser limits up to ~30 concurrent
+ * <video>s in Chrome).
+ *
+ * If a clip is asked for that hasn't been warmed yet (edge case), it's
+ * created on the fly — the first frame may be black briefly.
+ */
+export class VideoPool {
+  private container: HTMLElement;
+  /** One video per unique src. */
+  private slots = new Map<string, HTMLVideoElement>();
+  /** Currently visible video (null if none picked yet). */
+  active: HTMLVideoElement | null = null;
+
+  /** Media error hook (set by PlaybackEngine). */
+  onError: (err: EngineMediaError) => void = () => {};
+
+  /** Fired once per slot when it becomes playable (readyState ≥ 3, canplay). */
+  onSlotReady: (src: string) => void = () => {};
+
+  constructor(container: HTMLElement) {
+    this.container = container;
+  }
+
+  private makeVideo(src: string): HTMLVideoElement {
+    const v = document.createElement("video");
+    v.muted = true; // audio is handled separately (AudioContext, Phase 3)
+    v.playsInline = true;
+    v.preload = "auto";
+    Object.assign(v.style, {
+      position: "absolute",
+      inset: "0",
+      width: "100%",
+      height: "100%",
+      objectFit: "contain",
+      transition: "opacity 0ms", // hard cut, no crossfade by default
+      opacity: "0",
+    });
+    v.addEventListener("error", () => {
+      this.onError({ src, mediaError: v.error });
+    });
+    v.src = src;
+    v.load();
+    return v;
+  }
+
+  /** Get or create a slot for this src. Also seeks it to sourceSeconds if fresh. */
+  private ensureSlot(src: string, sourceSeconds: number): HTMLVideoElement {
+    let v = this.slots.get(src);
+    if (!v) {
+      v = this.makeVideo(src);
+      this.container.append(v);
+      this.slots.set(src, v);
+      const doSeek = () => {
+        try { v!.currentTime = sourceSeconds; } catch { /* too early */ }
+      };
+      if (v.readyState >= 1) doSeek();
+      else v.addEventListener("loadedmetadata", doSeek, { once: true });
+
+      // "Ready" = full media buffered (so any seek is network-free). We check
+      // on every `progress` event and on `canplaythrough`, both of which fire
+      // as the browser downloads more of the file. `canplay` alone fires way
+      // too early — the user perceives lag on the first scrub after it.
+      let fired = false;
+      const isFullyBuffered = () => {
+        const el = v!;
+        if (!el.duration || !isFinite(el.duration)) return false;
+        if (el.buffered.length === 0) return false;
+        const end = el.buffered.end(el.buffered.length - 1);
+        return end >= el.duration - 0.25; // 250 ms tolerance
+      };
+      const emitReadyIfDone = () => {
+        if (fired) return;
+        if (!isFullyBuffered()) return;
+        fired = true;
+        v!.removeEventListener("progress", emitReadyIfDone);
+        v!.removeEventListener("canplaythrough", emitReadyIfDone);
+        v!.removeEventListener("loadeddata", emitReadyIfDone);
+        this.onSlotReady(src);
+      };
+      v.addEventListener("progress", emitReadyIfDone);
+      v.addEventListener("canplaythrough", emitReadyIfDone);
+      v.addEventListener("loadeddata", emitReadyIfDone);
+      // Also check once immediately in case data is already present (cache hit).
+      emitReadyIfDone();
+    }
+    return v;
+  }
+
+  /**
+   * Warm the pool: create + preload a slot per unique clip. Idempotent.
+   * Removes slots for srcs no longer in the timeline (drop obsolete clips).
+   */
+  warm(clips: Array<{ src: string; sourceInSec: number }>) {
+    const wanted = new Set<string>();
+    for (const c of clips) {
+      if (!c.src) continue;
+      wanted.add(c.src);
+      this.ensureSlot(c.src, c.sourceInSec);
+    }
+    // Drop slots no longer in the timeline (avoid unbounded memory growth).
+    for (const [src, v] of this.slots) {
+      if (!wanted.has(src)) {
+        if (v === this.active) this.active = null;
+        v.pause();
+        v.remove();
+        this.slots.delete(src);
+      }
+    }
+  }
+
+  /**
+   * Show the slot for this src. Creates it on the fly if not warmed yet
+   * (fallback for edge cases). Returns true if the slot has decoded pixels
+   * ready to display (readyState ≥ 2).
+   *
+   * Side effect: hides the previous active (opacity 0, pauses it).
+   */
+  setActive(src: string, sourceSeconds: number): boolean {
+    const v = this.ensureSlot(src, sourceSeconds);
+    if (this.active && this.active !== v) {
+      this.active.style.opacity = "0";
+      this.active.pause();
+    }
+    v.style.opacity = "1";
+    this.active = v;
+    return v.readyState >= 2;
+  }
+
+  /** Hide the active (used when the timeline has a real gap → intentional black). */
+  hideActive() {
+    if (this.active) {
+      this.active.style.opacity = "0";
+      this.active.pause();
+    }
+  }
+
+  /** Src of the currently-visible video, or undefined. */
+  srcOfActive(): string | undefined {
+    if (!this.active) return undefined;
+    for (const [src, v] of this.slots) if (v === this.active) return src;
+    return undefined;
+  }
+
+  destroy() {
+    for (const v of this.slots.values()) {
+      v.pause();
+      v.remove();
+    }
+    this.slots.clear();
+    this.active = null;
+  }
+}
+
+// ─── The engine (clock + resolver + pool) ──────────────────────────
+
+export class PlaybackEngine {
+  private timeline: EngineTimeline;
+  private clock: MasterClock;
+  private pool: VideoPool;
+
+  /** Drift threshold (seconds) beyond which the <video> is re-seeked.
+   *  Too small = constant re-seeks (stutter). ~0.15s is a good start. */
+  private driftThreshold = 0.15;
+
+  /** How far ahead the next clip is preloaded (seconds). */
+  private preloadLookahead = 1.0;
+
+  /** Last measured drift (ms) on the active video, null if not measurable. */
+  private lastDriftMs: number | null = null;
+
+  /** Moves the playhead in the UI (frames). */
+  onFrame: (frame: Frames) => void = () => {};
+
+  /** Media error hook — consumers can e.g. fall back to the original
+   *  videoUrl (NOT implemented here; the model decides, not the engine). */
+  onError: (err: EngineMediaError) => void = () => {};
+
+  /** Fired once per src when its slot becomes playable (canplay). Use this
+   *  to hide a "loading" indicator on the clip in the UI. */
+  onSlotReady: (src: string) => void = () => {};
+
+  constructor(timeline: EngineTimeline, container: HTMLElement) {
+    this.timeline = timeline;
+    this.clock = new MasterClock(timeline.fps);
+    this.pool = new VideoPool(container);
+    this.pool.onError = (err) => this.onError(err);
+    this.pool.onSlotReady = (src) => this.onSlotReady(src);
+    this.clock.onTick = (frame) => this.render(frame);
+    this.warmPool();
+  }
+
+  /** Warm the pool with every unique clip.src in the timeline, seeked to
+   *  its source-in. Eager preload = zero seek latency at playback time. */
+  private warmPool() {
+    const seen = new Set<string>();
+    const clips: Array<{ src: string; sourceInSec: number }> = [];
+    for (const track of this.timeline.tracks) {
+      for (const clip of track.clips) {
+        if (!clip.src || seen.has(clip.src)) continue;
+        seen.add(clip.src);
+        clips.push({
+          src: clip.src,
+          sourceInSec: framesToSeconds(clip.sourceIn, this.fps),
+        });
+      }
+    }
+    this.pool.warm(clips);
+  }
+
+  get fps() {
+    return this.timeline.fps;
+  }
+  get currentFrame(): Frames {
+    return this.clock.currentFrame;
+  }
+  get isPlaying() {
+    return this.clock.playing;
+  }
+  get driftMs(): number | null {
+    return this.lastDriftMs;
+  }
+
+  play() {
+    this.clock.play();
+    this.pool.active?.play().catch(() => {});
+  }
+
+  pause() {
+    this.clock.pause();
+    this.pool.active?.pause();
+  }
+
+  seek(frame: Frames) {
+    this.clock.seek(frame);
+  }
+
+  /**
+   * Swap the timeline in place (an edit happened). The clock keeps running:
+   * we re-render the current frame so the compositor reflects the new model
+   * immediately. NEVER re-instantiate the engine for this — that would rebuild
+   * the <video> pool and reintroduce black frames.
+   *
+   * The clock fps is fixed at construction; if the new timeline disagrees we
+   * warn and keep the original fps rather than silently mixing frame rates.
+   */
+  setTimeline(next: EngineTimeline) {
+    if (next.fps !== this.timeline.fps) {
+      console.warn(
+        `[PlaybackEngine] new timeline fps ${next.fps} differs from clock fps ${this.timeline.fps}; keeping ${this.timeline.fps}`,
+      );
+    }
+    this.timeline = next;
+    this.warmPool();
+    this.render(this.clock.currentFrame);
+  }
+
+  destroy() {
+    this.clock.pause();
+    this.pool.destroy();
+  }
+
+  /**
+   * THE COMPOSITOR. Called every clock tick. With the multi-slot pool, every
+   * unique clip.src has its own <video> preloaded at its entry point → any
+   * seek is a pure opacity swap on an already-decoded element. Zero load
+   * latency (subject to browser memory limits).
+   *
+   * 1) resolve the active clip at `t`
+   * 2) switch to the right slot (opacity swap)
+   * 3) drift-correct the visible video
+   * 4) move the playhead
+   */
+  private render(t: Frames) {
+    const track = this.timeline.tracks[0]; // Phase 1: single video track
+    const active = resolveClipAt(track, t);
+
+    if (!active) {
+      // real timeline gap → intentional black
+      this.pool.hideActive();
+      this.lastDriftMs = null;
+      this.onFrame(t);
+      return;
+    }
+
+    const wantSrc = active.clip.src;
+    const wantSourceSec = framesToSeconds(active.sourceFrame, this.fps);
+    const srcChanged = this.pool.srcOfActive() !== wantSrc;
+    const ready = this.pool.setActive(wantSrc, wantSourceSec);
+    if (srcChanged && this.clock.playing) {
+      this.pool.active?.play().catch(() => {});
+    }
+
+    // Drift correction — while playing, LET the <video> run on its own;
+    // only re-seek if it drifts too far. Re-seeking every frame = stutter.
+    const v = this.pool.active;
+    if (v && v.readyState >= 2) {
+      const drift = Math.abs(v.currentTime - wantSourceSec);
+      this.lastDriftMs = drift * 1000;
+      // On a fresh slot switch, snap immediately regardless of the threshold
+      // (the slot may be positioned at its sourceIn, not our current wantSourceSec).
+      if (!this.clock.playing || srcChanged || drift > this.driftThreshold) {
+        v.currentTime = wantSourceSec;
+      }
+    } else {
+      this.lastDriftMs = null;
+    }
+
+    // preloadLookahead is retained for future use (e.g. LRU-cache growth on
+    // dynamic timelines) but the multi-slot pool already keeps every clip
+    // warmed up-front — no per-tick preload needed for the common case.
+    void this.preloadLookahead;
+
+    this.onFrame(t);
+  }
+}

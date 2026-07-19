@@ -33,7 +33,8 @@ def _update_job(job_id: str, status: str, fortschritt: int, nachricht: str, erge
 
     try:
         import redis
-        r = redis.from_url("redis://localhost:6379/0")
+        from backend.core.config import REDIS_URL
+        r = redis.from_url(REDIS_URL)
         r.publish(f"job:{job_id}", json.dumps({
             "status": status,
             "progress": fortschritt,

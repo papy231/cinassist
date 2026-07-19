@@ -41,7 +41,8 @@ export function useJobStatus(jobId: string | null) {
       return;
     }
 
-    const ws = new WebSocket(`ws://localhost:8001/ws/jobs/${jobId}`);
+    const wsBase = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8001";
+    const ws = new WebSocket(`${wsBase}/ws/jobs/${jobId}`);
     wsRef.current = ws;
 
     ws.onopen = () => {

@@ -74,7 +74,8 @@ def _update_job(
     # Redis Pub/Sub für WebSocket-Benachrichtigung
     try:
         import redis
-        r = redis.from_url("redis://localhost:6379/0")
+        from backend.core.config import REDIS_URL
+        r = redis.from_url(REDIS_URL)
         payload: dict = {
             "status": status,
             "progress": fortschritt,
@@ -328,10 +329,12 @@ def schritt_transkription(audio_pfad: str, job_id: str) -> dict | None:
     try:
         import mlx_whisper
 
+        # language=None → auto-detect (EN/DE/FR/etc.). Corrige le bug où
+        # Snowden/MLK anglais ne transcrivaient pas avec language="de" forcé.
         result = mlx_whisper.transcribe(
             audio_pfad,
             path_or_hf_repo=WHISPER_MODEL,
-            language="de",
+            language=None,
             word_timestamps=True,
         )
 
@@ -818,6 +821,80 @@ def schritt_clip_embeddings(video_pfad: str, szenen: list[dict], job_id: str) ->
 # SCHRITT 5: Szenen beschreiben (Ollama / LLaMA3)
 # ═══════════════════════════════════════════════════════════
 
+def schritt_diarization(audio_pfad: str, job_id: str) -> dict:
+    """
+    Speaker diarization sur l'audio extrait (Vague 1.2).
+
+    Silent no-op si pyannote/HF token manquant : retourne
+    {"available": False, ...}, la pipeline continue sans casser.
+    """
+    _update_job(job_id, "laeuft", 68, "Speaker diarization läuft…", schritt="diarization")
+    try:
+        from backend.core.diarize import diarize_audio
+        result = diarize_audio(audio_pfad)
+    except Exception as e:
+        logger.warning(f"Diarization module indisponible : {e}")
+        result = {"available": False, "error": str(e), "segments": [], "speakers": [], "total_speakers": 0}
+
+    if not result.get("available"):
+        _update_job(
+            job_id, "laeuft", 70,
+            f"Diarization übersprungen ({result.get('error', 'no HF token')}).",
+            schritt="diarization",
+            schritt_daten={"skipped": True, "reason": result.get("error")},
+        )
+    else:
+        _update_job(
+            job_id, "laeuft", 70,
+            f"Diarization: {result['total_speakers']} Sprecher, {len(result['segments'])} Segmente.",
+            schritt="diarization",
+            schritt_daten={
+                "total_speakers": result["total_speakers"],
+                "segments": len(result["segments"]),
+            },
+        )
+    return result
+
+
+def schritt_face_detection(szenen: list[dict], job_id: str) -> list[dict]:
+    """
+    Face detection + framing classification (Vague 1.3).
+
+    Utilise OpenCV Haar cascade sur le thumbnail principal de chaque scène.
+    Retourne une liste alignée avec `szenen` : {face_count, framing, faces}.
+    Framing ∈ {extreme_closeup, closeup, medium, wide_with_person, wide_no_person}.
+
+    Latence : ~5-80ms/scène sur M4 (warmup 50ms au 1er call).
+    """
+    _update_job(job_id, "laeuft", 78, "Face detection läuft…", schritt="face_detection")
+    try:
+        from backend.core.face_detect import detect_faces
+    except Exception as e:
+        logger.warning(f"face_detect indisponible: {e}")
+        return [{"face_count": 0, "framing": None, "faces": None} for _ in szenen]
+
+    results: list[dict] = []
+    for szene in szenen:
+        thumb = szene.get("thumbnail_pfad")
+        if thumb and Path(thumb).exists():
+            try:
+                r = detect_faces(thumb)
+            except Exception as e:
+                logger.warning(f"face_detect scene {szene.get('szenen_nr')} failed: {e}")
+                r = {"face_count": 0, "framing": None, "faces": None}
+        else:
+            r = {"face_count": 0, "framing": None, "faces": None}
+        results.append(r)
+
+    face_scenes = sum(1 for r in results if r.get("face_count", 0) > 0)
+    _update_job(
+        job_id, "laeuft", 79, f"Face detection: {face_scenes}/{len(szenen)} Szenen mit Personen.",
+        schritt="face_detection",
+        schritt_daten={"face_scenes": face_scenes, "total": len(szenen)},
+    )
+    return results
+
+
 def schritt_szenen_beschreiben(
     szenen: list[dict],
     transkription: dict,
@@ -839,62 +916,37 @@ def schritt_szenen_beschreiben(
     """
     import base64
 
-    _update_job(job_id, "laeuft", 80, "Szenen werden beschrieben (LLaVA Vision)…", schritt="beschreibungen")
+    _update_job(job_id, "laeuft", 80, "Szenen werden beschrieben (Moondream Vision)…", schritt="beschreibungen")
 
     try:
         import httpx
 
         beschreibungen: list[str] = []
         total = len(szenen)
-        # Welches Modell wirklich verwendet wurde (zur Berichterstattung)
-        used_model = "llava:7b"
+        used_model = "moondream"
         llava_failures = 0
 
-        # Visual prompt — strikt faktisch, agnostisch zum Genre.
-        # Sprache: bevorzugt Deutsch, akzeptiert aber Englisch falls
-        # LLaVA-7B die Sprachvorgabe ignoriert (bekanntes Verhalten kleinerer
-        # multimodaler Modelle). Wir erzwingen Deutsch nicht — eine
-        # falsch-übersetzte Beschreibung wäre schlimmer als eine englische.
-        VISION_PROMPT = (
-            "ANTWORTE AUF DEUTSCH. "
-            "Beschreibe, was in diesem Bild zu sehen ist — in 2-3 sachlichen Sätzen. "
-            "Be strictly factual: name the subject, the framing "
-            "(close-up / medium / wide / extreme close-up), the setting, lighting "
-            "(natural / studio / dim / warm / cold) and any prominent objects. "
-            "Do NOT interpret emotions, story or intentions. "
-            "Do NOT invent dialogue or events. "
-            "WICHTIG: Antworte auf Deutsch."
-        )
+        # Moondream aime les prompts courts et directs. Les prompts complexes
+        # (multi-contraintes, format imposé) le font répondre vide ou halluciner.
+        # Testé sur Mac mini M4 : ~0.4s/description, output anglais factuel de qualité.
+        VISION_PROMPT = "Describe the scene in this image in one sentence."
 
         for i, szene in enumerate(szenen):
             beschreibung: str | None = None
             thumb_pfad = szene.get("thumbnail_pfad")
 
-            # ─── 1. PRIMÄR : LLaVA auf das Thumbnail ──────────────────
+            # ─── 1. PRIMÄR : Moondream Vision (avec retry anti-hallucination) ──
             if thumb_pfad and Path(thumb_pfad).exists():
                 try:
-                    with open(thumb_pfad, "rb") as f:
-                        img_b64 = base64.b64encode(f.read()).decode("utf-8")
-                    resp = httpx.post(
-                        f"{OLLAMA_BASE_URL}/api/generate",
-                        json={
-                            "model": "llava:7b",
-                            "prompt": VISION_PROMPT,
-                            "images": [img_b64],
-                            "stream": False,
-                            # num_predict 220 → erlaubt 2-3 vollständige Sätze ohne
-                            # vorzeitiges Abschneiden. Vorher 100 = oft unvollständig.
-                            "options": {"temperature": 0.2, "num_predict": 220},
-                        },
-                        timeout=180.0,
-                    )
-                    resp.raise_for_status()
-                    text = resp.json().get("response", "").strip()
+                    from backend.core.vision_describe import describe_image
+                    text = describe_image(thumb_pfad, max_retries=2)
                     if text:
                         beschreibung = _normalize_llava(text)
+                    else:
+                        llava_failures += 1
                 except Exception as e:
                     llava_failures += 1
-                    logger.warning(f"LLaVA fehlgeschlagen für Szene {i+1}: {e}")
+                    logger.warning(f"Moondream fehlgeschlagen für Szene {i+1}: {e}")
 
             # ─── 2. FALLBACK : LLaMA3 textuell aus Dialog ────────────
             # Falls LLaVA fehlschlägt (z.B. fehlendes Thumbnail oder Modell-
@@ -1016,6 +1068,9 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
         # ─── Proxy für Browser-Vorschau erstellen (960p, H.264) ───
         _update_job(job_id, "laeuft", 4, "Proxy für Browser-Vorschau wird erstellt...", schritt="proxy")
         proxy_pfad = PROXY_DIR / f"{Path(video_pfad).stem}_proxy.mp4"
+        # 0-Byte-Proxy = früherer FFmpeg-Fehler → löschen und neu versuchen
+        if proxy_pfad.exists() and proxy_pfad.stat().st_size == 0:
+            proxy_pfad.unlink()
         if not proxy_pfad.exists():
             try:
                 w, h = (int(x) for x in info["aufloesung"].split("x"))
@@ -1034,13 +1089,20 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
                     # erzeugt (HTML5 Video kann nur zum nächsten Keyframe
                     # springen, nicht zum exakten Frame).
                     "-g", "12", "-keyint_min", "12", "-sc_threshold", "0",
-                    "-c:a", "aac", "-b:a", "128k",
+                    # -ac 2 : 5.1/7.1-Quellen (z. B. Big Buck Bunny) auf Stereo
+                    # downmixen — der AAC-Encoder lehnt "6 channels" ab und
+                    # FFmpeg schreibt sonst eine 0-Byte-Datei.
+                    "-c:a", "aac", "-ac", "2", "-b:a", "128k",
                     "-movflags", "+faststart",
                     str(proxy_pfad),
                 ], capture_output=True, timeout=600)
                 logger.info(f"Proxy erstellt: {proxy_pfad}")
             except Exception as e:
                 logger.warning(f"Proxy-Erstellung fehlgeschlagen: {e}")
+            # Fehlgeschlagener Lauf hinterlässt 0-Byte-Datei → aufräumen,
+            # sonst liefert die API eine kaputte proxy_url aus (416 → schwarzer Player).
+            if proxy_pfad.exists() and proxy_pfad.stat().st_size == 0:
+                proxy_pfad.unlink()
         if proxy_pfad.exists():
             proxy_size_mb = round(proxy_pfad.stat().st_size / (1024 * 1024), 2)
             _update_job(
@@ -1069,9 +1131,11 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
                 subprocess.run([
                     FFMPEG_BIN, "-y", "-i", video_pfad,
                     "-filter_complex",
-                    # 1920px breit, 80px hoch, hellgrüne Wellenform auf
-                    # transparentem Hintergrund (für Overlay auf Timeline)
-                    "showwavespic=s=1920x80:colors=#86efac:split_channels=0",
+                    # HD-Wellenform: 5760×160 (3× Breite, 2× Höhe) für DaVinci-
+                    # ähnliches Detail beim Reinzoomen. `scale=cbrt` (Kubik-
+                    # wurzel) hebt leise Signale sichtbar an — sonst verschwin-
+                    # den ruhige Dialogpassagen komplett in der Mittellinie.
+                    "showwavespic=s=5760x160:colors=#d0f5da:split_channels=0:scale=cbrt",
                     "-frames:v", "1",
                     str(wf_pfad),
                 ], capture_output=True, timeout=120)
@@ -1086,15 +1150,18 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
         strip_pfad = PROXY_DIR / f"{Path(video_pfad).stem}_strip.jpg"
         if not strip_pfad.exists() and info.get("dauer", 0) > 0:
             try:
-                n_tiles = 24
+                # Strip haute résolution (Niveau 1) : 60 tuiles × 192×108 px
+                # → 11520×108 px total. Supporte un stretch × 4-6 sans
+                # pixelisation notable après cut/trim d'un clip.
+                n_tiles = 60
                 fps_rate = n_tiles / info["dauer"]
                 subprocess.run([
                     FFMPEG_BIN, "-y", "-i", video_pfad,
-                    "-vf", f"fps={fps_rate},scale=80:45,tile={n_tiles}x1",
-                    "-frames:v", "1", "-q:v", "5",
+                    "-vf", f"fps={fps_rate},scale=192:108,tile={n_tiles}x1",
+                    "-frames:v", "1", "-q:v", "3",
                     str(strip_pfad),
-                ], capture_output=True, timeout=120)
-                logger.info(f"Thumbnail-Strip erstellt: {strip_pfad}")
+                ], capture_output=True, timeout=180)
+                logger.info(f"Thumbnail-Strip erstellt (60×192×108): {strip_pfad}")
             except Exception as e:
                 logger.warning(f"Thumbnail-Strip-Erzeugung fehlgeschlagen: {e}")
 
@@ -1103,8 +1170,12 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
 
         # ─── 2. Transkription ────────────────────────────
         transkription = {"text": "", "sprache": "de", "segmente": []}
+        diarization = {"available": False, "segments": [], "speakers": [], "total_speakers": 0}
         if audio_pfad:
             transkription = schritt_transkription(audio_pfad, job_id)
+            # ─── 2b. Speaker diarization (Vague 1.2) ──────
+            # No-op silencieux si le token HF manque : diarization["available"] = False.
+            diarization = schritt_diarization(audio_pfad, job_id)
             # Temp-Audio löschen
             Path(audio_pfad).unlink(missing_ok=True)
 
@@ -1119,6 +1190,9 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
 
         # ─── 5. Szenen beschreiben ───────────────────────
         beschreibungen = schritt_szenen_beschreiben(szenen, transkription, job_id)
+
+        # ─── 5b. Face detection + framing (Vague 1.3) ────
+        faces_by_scene = schritt_face_detection(szenen, job_id)
 
         # ─── Ergebnisse in DB speichern ──────────────────
         _update_job(job_id, "laeuft", 97, "Ergebnisse werden gespeichert...", schritt="persistierung")
@@ -1146,8 +1220,50 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
                 transkription=seg_text.strip() or None,
                 transkription_json=seg_json or None,
                 analyse_visuelle=analyse_visuelle[i] if i < len(analyse_visuelle) else None,
+                face_count=(faces_by_scene[i].get("face_count", 0) if i < len(faces_by_scene) else 0),
+                framing=(faces_by_scene[i].get("framing") if i < len(faces_by_scene) else None),
+                faces_data=(faces_by_scene[i].get("faces") if i < len(faces_by_scene) else None),
             )
             db.add(szene)
+
+        # ─── 6. Speaker + SceneSpeaker persistieren (Vague 1.2) ──
+        if diarization.get("available") and diarization.get("segments"):
+            from backend.core.database import Speaker, SceneSpeaker
+            from backend.core.diarize import summarize_by_speaker, match_speakers_to_scenes
+
+            # Flush pour avoir les IDs des Szene
+            db.flush()
+
+            summary = summarize_by_speaker(diarization["segments"])
+            speaker_row_by_label: dict[str, Speaker] = {}
+            for label, agg in summary.items():
+                sp = Speaker(
+                    clip_id=clip_id,
+                    label_auto=label,
+                    total_speaking_time=agg["total_time"],
+                    segment_count=agg["segment_count"],
+                )
+                db.add(sp)
+                speaker_row_by_label[label] = sp
+            db.flush()  # génère les speaker IDs
+
+            # Association scène ↔ speaker
+            # Re-query les Szene qu'on vient d'ajouter pour avoir leurs IDs
+            from sqlalchemy import select as _sel
+            scene_rows = db.execute(
+                _sel(Szene).where(Szene.clip_id == clip_id).order_by(Szene.szenen_nr)
+            ).scalars().all()
+            scene_ranges = [(float(s.start_zeit), float(s.end_zeit)) for s in scene_rows]
+            per_scene = match_speakers_to_scenes(diarization["segments"], scene_ranges)
+            for scene_row, sp_map in zip(scene_rows, per_scene):
+                for label, dur in sp_map.items():
+                    sp = speaker_row_by_label.get(label)
+                    if sp:
+                        db.add(SceneSpeaker(
+                            scene_id=scene_row.id,
+                            speaker_id=sp.id,
+                            speaking_time=dur,
+                        ))
 
         # Clip-Status aktualisieren
         clip.status = "analysiert"

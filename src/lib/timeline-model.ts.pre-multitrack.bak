@@ -1,0 +1,136 @@
+/**
+ * CinAssist timeline model — Layer 1: the source of truth.
+ *
+ * All internal time is in INTEGER FRAMES. Floating-point seconds drift and
+ * break sync; convert to seconds only at the system boundaries
+ * (`video.currentTime`, display). See skill: cinassist-nle-architecture.
+ *
+ * Framework-agnostic: no React, no DOM.
+ */
+
+/** Time in integer frames. */
+export type Frames = number;
+
+export interface EngineClip {
+  id: string;
+  /** Source media URL. */
+  src: string;
+  /** Entry point INTO the source media (frames). */
+  sourceIn: Frames;
+  /** Position ON the timeline (frames). */
+  timelineStart: Frames;
+  /** Duration on the timeline (frames). No sourceOut: it is derived. */
+  duration: Frames;
+}
+
+/** Clips sorted by timelineStart, no overlap. Enforced by normalize(). */
+export interface EngineTrack {
+  id: string;
+  clips: EngineClip[];
+}
+
+export interface EngineTimeline {
+  fps: number;
+  tracks: EngineTrack[];
+}
+
+// ─── Conversions (only at system boundaries) ───────────────────────
+
+export function secondsToFrames(sec: number, fps: number): Frames {
+  return Math.round(sec * fps);
+}
+
+export function framesToSeconds(f: Frames, fps: number): number {
+  return f / fps;
+}
+
+/** Display timecode `HH:MM:SS:FF`. */
+export function framesToTimecode(f: Frames, fps: number): string {
+  const fpsInt = Math.max(1, Math.round(fps));
+  const total = Math.max(0, Math.floor(f));
+  const ff = total % fpsInt;
+  const ss = Math.floor(total / fpsInt) % 60;
+  const mm = Math.floor(total / (fpsInt * 60)) % 60;
+  const hh = Math.floor(total / (fpsInt * 3600));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(hh)}:${pad(mm)}:${pad(ss)}:${pad(ff)}`;
+}
+
+// ─── Adapter from the existing seconds-based Editor model ──────────
+
+/**
+ * Mirror of the TLClip shape in `src/components/Editor.tsx` (seconds-based).
+ * Re-defined here so lib/ never reaches up into components/. Field names are
+ * identical, so the Editor's TLClip is structurally assignable to this type.
+ */
+export type TLClip = {
+  tlId: string;
+  clipId: string;
+  start: number;      // seconds on timeline
+  mediaStart: number; // seconds into source
+  duration: number;   // seconds
+  name?: string;
+  proxyUrl?: string | null;
+  videoUrl?: string | null;
+  sourceDuration?: number;
+};
+
+/**
+ * Converts the existing TLClip[] (seconds) into frame-based engine tracks.
+ * Clips without a playable src are skipped. Single video track for now.
+ *
+ * `brokenProxies`: proxy URLs detected as defective at runtime (0-byte → 416 →
+ * DEMUXER_ERROR). For those clips we fall back to the original `videoUrl`,
+ * mirroring the old inline fallback in Editor.tsx.
+ *
+ * Duration is derived as (round(end) − round(start)) rather than round(dur):
+ * rounding start and duration independently can leave a 1-frame overlap between
+ * two contiguous clips (e.g. after a split), which normalize() rejects. Tiling
+ * off the shared rounded boundary keeps adjacent clips exactly flush.
+ */
+export function tlClipsToEngineTracks(
+  tlClips: TLClip[],
+  fps: number,
+  brokenProxies?: Set<string>,
+): EngineTrack[] {
+  const clips: EngineClip[] = [];
+  for (const c of tlClips) {
+    const proxyOk = c.proxyUrl && !(brokenProxies?.has(c.proxyUrl));
+    const src = (proxyOk ? c.proxyUrl : c.videoUrl ?? c.proxyUrl) ?? "";
+    if (!src) continue;
+    const startF = secondsToFrames(c.start, fps);
+    const endF = secondsToFrames(c.start + c.duration, fps);
+    clips.push({
+      id: c.tlId,
+      src,
+      sourceIn: secondsToFrames(c.mediaStart, fps),
+      timelineStart: startF,
+      duration: endF - startF,
+    });
+  }
+  return [normalize({ id: "v1", clips })];
+}
+
+// ─── Invariants ────────────────────────────────────────────────────
+
+/**
+ * Enforces the track invariants: clips sorted by timelineStart, no
+ * zero/negative durations, sourceIn ≥ 0. Overlaps are NOT fixed silently —
+ * they indicate a broken edit operation upstream, so we throw.
+ */
+export function normalize(track: EngineTrack): EngineTrack {
+  const clips = track.clips
+    .filter((c) => c.duration > 0)
+    .map((c) => (c.sourceIn < 0 ? { ...c, sourceIn: 0 } : c))
+    .sort((a, b) => a.timelineStart - b.timelineStart);
+
+  for (let i = 1; i < clips.length; i++) {
+    const prev = clips[i - 1];
+    if (clips[i].timelineStart < prev.timelineStart + prev.duration) {
+      throw new Error(
+        `Track "${track.id}": clip "${clips[i].id}" overlaps "${prev.id}" — fix the edit operation, overlaps are never auto-resolved`,
+      );
+    }
+  }
+  return { id: track.id, clips };
+}

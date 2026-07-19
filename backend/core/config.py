@@ -56,3 +56,10 @@ WS_PING_TIMEOUT = 60
 AUDIO_SAMPLE_RATE = 16000
 SCENE_THRESHOLD = 27.0  # PySceneDetect ContentDetector
 CLIP_EMBEDDING_DIM = 512
+
+# ─── Zeitzone (Celery Beat, Logs) ──────────────────────
+TIMEZONE = os.getenv("TZ", "Europe/Berlin")
+
+# ─── CORS erlaubte Origins ─────────────────────────────
+_default_origins = "http://localhost:3003,http://localhost:3000,http://127.0.0.1:3003"
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", _default_origins).split(",") if o.strip()]

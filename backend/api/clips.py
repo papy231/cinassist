@@ -29,6 +29,19 @@ ERLAUBTE_ENDUNGEN = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 MAX_DATEIGROESSE = 5 * 1024 * 1024 * 1024  # 5 GB
 
 
+def _nonempty(p: Path) -> bool:
+    """True nur wenn die Datei existiert UND nicht leer ist.
+
+    Fehlgeschlagene FFmpeg-Läufe hinterlassen 0-Byte-Proxies; die dürfen
+    NIE als proxy_url ausgeliefert werden (Range-Request → 416 → schwarzer
+    Player im Frontend).
+    """
+    try:
+        return p.exists() and p.stat().st_size > 0
+    except OSError:
+        return False
+
+
 # ─── Upload ──────────────────────────────────────────────
 
 @router.post("/upload")
@@ -142,7 +155,7 @@ async def clips_auflisten(db: AsyncSession = Depends(get_db)):
             "video_url": f"/uploads/{Path(clip.dateipfad).name}" if clip.dateipfad else None,
             "proxy_url": (
                 f"/proxies/{Path(clip.dateipfad).stem}_proxy.mp4"
-                if clip.dateipfad and (PROXY_DIR / f"{Path(clip.dateipfad).stem}_proxy.mp4").exists()
+                if clip.dateipfad and _nonempty(PROXY_DIR / f"{Path(clip.dateipfad).stem}_proxy.mp4")
                 else None
             ),
             "waveform_url": (
@@ -379,9 +392,10 @@ async def clip_pipeline_bericht(clip_id: str, db: AsyncSession = Depends(get_db)
             f"Szene {s.szenen_nr}: {s.beschreibung}"
             for s in szenen_mit_desc
         ]
+        from backend.core.config import OLLAMA_MODEL
         history["beschreibungen"] = {
             "beschreibungen": len(szenen_mit_desc),
-            "modell": "llama3",
+            "modell": OLLAMA_MODEL,
             "provider": "Ollama (lokal)",
             "alle": alle_beschreibungen,
         }

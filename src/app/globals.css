@@ -1,99 +1,12 @@
-@import "tailwindcss";
-
-/* ═══ CinAssist — Design Tokens ═══ */
-:root {
-  --bg0: #080909;
-  --bg1: #0f1011;
-  --bg2: #161718;
-  --bg3: #1e2022;
-  --bg4: #262a2c;
-  --bg5: #30353a;
-
-  --border:  rgba(255,255,255,0.06);
-  --border2: rgba(255,255,255,0.1);
-  --border3: rgba(255,255,255,0.18);
-
-  --text:  #dde2e8;
-  --text2: #7a8490;
-  --text3: #45505a;
-
-  --orange:      #2563eb;
-  --orange-soft:  rgba(37,99,235,0.15);
-  --blue:        #3b82f6;
-  --blue-soft:    rgba(59,130,246,0.12);
-
-  /* HAW brand blue accent (alias) */
-  --accent:      #2563eb;
-  --accent-soft: rgba(37,99,235,0.15);
-
-  /* Sidebar tokens */
-  --sidebar-w:   200px;
-  --bg-sidebar:  #0b0d0e;
-  --bg-raised:   #1e2022;
-  --gold:        #2563eb;
-  --gold-s:      rgba(37,99,235,0.15);
-  --gold-b:      rgba(37,99,235,0.35);
-  --grade:       #22c55e;
-  --fx:          #22c55e;
-  --t0:          #dde2e8;
-  --t1:          #a0aab4;
-  --t2:          #7a8490;
-  --t3:          #45505a;
-  --b0:          rgba(255,255,255,0.06);
-  --b1:          rgba(255,255,255,0.1);
-  --b2:          rgba(255,255,255,0.18);
-  --s1:          rgba(255,255,255,0.03);
-  --s2:          rgba(37,99,235,0.1);
-  --green:       #22c55e;
-  --green-soft:   rgba(34,197,94,0.1);
-  --purple:      #a855f7;
-  --purple-soft:  rgba(168,85,247,0.1);
-  --red:         #ef4444;
-
-  --track-h: 52px;
-  --ruler-h: 28px;
-  --left-w:  56px;
-
-  --font: 'Helvetica Neue', Helvetica, Arial, -apple-system, sans-serif;
-  --mono: 'Helvetica Neue', Helvetica, Arial, -apple-system, sans-serif;
-}
-
-@theme inline {
-  --color-background: var(--bg0);
-  --color-foreground: var(--text);
-}
-
-/* ═══ Base ═══ */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-html, body {
-  height: 100%;
-  background: var(--bg0);
-  color: var(--text);
-  font-family: var(--font);
-  font-size: 13px;
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: radial-gradient(120% 120% at 50% 0%, #8a8a8a, #5f5f5f);
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
+  color: #e9e9e9;
   overflow: hidden;
-  user-select: none;
 }
-
-/* ═══ Scrollbar ═══ */
-::-webkit-scrollbar       { width: 3px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--bg5); border-radius: 2px; }
-
-/* ═══ Focus & selection ═══ */
-*:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; border-radius: 4px; }
-input:focus, textarea:focus { outline: none; }
-::selection { background: rgba(37,99,235,0.2); color: var(--text); }
-
-/* ═══ Keyframes ═══ */
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
-@keyframes slideIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+a { color: #b9d94a; text-decoration: none; }
+a:hover { color: #cde86a; }
+button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* Tabular digits for timecodes / numeric readouts */
-[style*="--mono"] { font-variant-numeric: tabular-nums; }
-code, kbd, .tabular { font-variant-numeric: tabular-nums; }

@@ -3,8 +3,8 @@
  * Alle Aufrufe gehen an localhost:8001 (100% lokal).
  */
 
-const API = "http://localhost:8001";
-const WS_API = "ws://localhost:8001";
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+const WS_API = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8001";
 
 // ─── Typen ──────────────────────────────────────────────
 

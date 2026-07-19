@@ -1,17 +1,18 @@
 import type { Metadata } from "next";
+import { Hanken_Grotesk } from "next/font/google";
 import "./globals.css";
 
+const hanken = Hanken_Grotesk({ subsets: ["latin"], weight: ["400", "500", "600", "700"] });
+
 export const metadata: Metadata = {
-  title: "HAW CineAssist",
-  description: "KI-gestützte Videoschnitt-Plattform · 100% lokal · Open Source",
+  title: "Meine Reise 2023 – Videoeditor",
+  description: "Interaktiver Videoeditor",
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{ children: React.ReactNode }>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="de" className="h-full">
-      <body className="h-full antialiased">{children}</body>
+    <html lang="de">
+      <body className={hanken.className}>{children}</body>
     </html>
   );
 }

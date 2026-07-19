@@ -53,7 +53,8 @@ async def job_websocket(websocket: WebSocket, job_id: str):
         # ── Pub/Sub + DB-Polling als Fallback ────────────────────────
         try:
             import redis.asyncio as aioredis
-            r = aioredis.from_url("redis://localhost:6379/0")
+            from backend.core.config import REDIS_URL
+            r = aioredis.from_url(REDIS_URL)
             pubsub = r.pubsub()
             await pubsub.subscribe(f"job:{job_id}")
             use_pubsub = True

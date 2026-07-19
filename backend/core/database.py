@@ -61,10 +61,15 @@ class Szene(Base):
 
     # KI-Analyse
     clip_embedding = Column(ARRAY(Float), nullable=True)      # CLIP-Vektor (512-dim)
-    beschreibung = Column(Text, nullable=True)                # LLaMA3-Beschreibung
+    beschreibung = Column(Text, nullable=True)                # Moondream-Vision-Beschreibung
     transkription = Column(Text, nullable=True)               # Whisper-Text für dieses Segment
     transkription_json = Column(JSON, nullable=True)          # Whisper mit Timestamps
     analyse_visuelle = Column(JSON, nullable=True)            # Pixel-Analyse: luminosité, température, contraste, mouvement, énergie
+
+    # Face detection (Vague 1.3)
+    face_count = Column(Integer, nullable=True, default=0)    # Nombre de visages détectés
+    framing = Column(String(30), nullable=True)               # extreme_closeup|closeup|medium|wide_with_person|wide_no_person
+    faces_data = Column(JSON, nullable=True)                  # bboxes + area_ratios
 
     clip = relationship("Clip", back_populates="szenen")
 
@@ -85,6 +90,28 @@ class Job(Base):
     aktualisiert_am = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     clip = relationship("Clip", back_populates="jobs")
+
+
+# ─── Speaker + SceneSpeaker (Vague 1.2 - Diarization) ──
+class Speaker(Base):
+    __tablename__ = "speakers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    clip_id = Column(UUID(as_uuid=True), ForeignKey("clips.id", ondelete="CASCADE"), nullable=False)
+    label_auto = Column(String(50), nullable=False)          # "SPEAKER_00", "SPEAKER_01"...
+    label_manual = Column(String(100), nullable=True)         # "Anna", "Marc" — set par user
+    total_speaking_time = Column(Float, default=0.0)          # secondes cumulées
+    segment_count = Column(Integer, default=0)
+
+
+class SceneSpeaker(Base):
+    """Association many-to-many : quelle voix apparaît dans quelle scène, combien de temps."""
+    __tablename__ = "scene_speakers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    scene_id = Column(UUID(as_uuid=True), ForeignKey("szenen.id", ondelete="CASCADE"), nullable=False)
+    speaker_id = Column(UUID(as_uuid=True), ForeignKey("speakers.id", ondelete="CASCADE"), nullable=False)
+    speaking_time = Column(Float, default=0.0)                # secondes de parole dans cette scène
 
 
 # ─── Timeline ───────────────────────────────────────────
@@ -108,6 +135,9 @@ async def init_db():
         from sqlalchemy import text
         migrations = [
             "ALTER TABLE szenen ADD COLUMN IF NOT EXISTS analyse_visuelle JSONB DEFAULT NULL",
+            "ALTER TABLE szenen ADD COLUMN IF NOT EXISTS face_count INTEGER DEFAULT 0",
+            "ALTER TABLE szenen ADD COLUMN IF NOT EXISTS framing VARCHAR(30)",
+            "ALTER TABLE szenen ADD COLUMN IF NOT EXISTS faces_data JSONB DEFAULT NULL",
         ]
         for sql in migrations:
             try:

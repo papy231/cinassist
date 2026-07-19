@@ -1,0 +1,1433 @@
+"""
+CinAssist — Agent ReAct (Vague 1.4)
+
+Endpoint : POST /api/agent/run — streaming SSE d'un agent conversationnel
+qui décompose une intention en langage naturel en une chaîne de tool calls.
+
+Modèle : qwen2.5:14b en local via Ollama (format=json pour parsing fiable).
+
+Architecture :
+    - Loop ReAct classique : thought → action → observation → loop
+    - Chaque tool = coroutine async(args, db) -> dict
+    - Streaming SSE : chaque étape (thought/action/observation/done) est
+      poussée au frontend en temps réel
+
+Ce MVP expose 4 tools pour valider l'orchestration ; on ajoutera face
+detection / diarization / assemblage / export au fur et à mesure des
+Vagues 1.2 → 1.6.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import tempfile
+import time
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
+
+import httpx
+from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from backend.api.search import _embed_text
+from backend.core.config import OLLAMA_BASE_URL
+from backend.core.database import Clip, SceneSpeaker, Speaker, Szene, get_db
+from backend.core.otio_export import export_to_file as _otio_export_to_file
+
+logger = logging.getLogger("cinassist.agent")
+router = APIRouter(prefix="/api/agent", tags=["Agent"])
+
+# ─── Config ──────────────────────────────────────────────────
+AGENT_MODEL = "qwen2.5:14b"
+MAX_ITERATIONS = 12
+TEMPERATURE = 0.2
+
+
+# ─── Tool infrastructure ─────────────────────────────────────
+@dataclass
+class Tool:
+    name: str
+    description: str
+    args_schema: dict[str, str]  # arg_name -> "type — description"
+    handler: Callable[..., Awaitable[dict]]
+
+
+async def _tool_list_clips(args: dict, db: AsyncSession) -> dict:
+    """Liste tous les clips uploadés avec leurs métadonnées de base."""
+    result = await db.execute(
+        select(Clip).options(selectinload(Clip.szenen))
+    )
+    clips = result.scalars().all()
+    return {
+        "clips": [
+            {
+                "clip_id": str(c.id),
+                "dateiname": c.dateiname,
+                "dauer_s": c.dauer,
+                "status": c.status,
+                "scene_count": len(c.szenen),
+            }
+            for c in clips
+        ]
+    }
+
+
+async def _tool_search_scenes_by_prompt(args: dict, db: AsyncSession) -> dict:
+    """CLIP text search sur toutes les scènes avec embedding."""
+    query = args.get("query", "")
+    limit = int(args.get("limit", 5))
+    if not query:
+        return {"error": "query is required"}
+
+    query_emb = _embed_text(query)
+
+    import numpy as np
+
+    stmt = (
+        select(Szene)
+        .options(selectinload(Szene.clip))
+        .where(Szene.clip_embedding.isnot(None))
+    )
+    result = await db.execute(stmt)
+    scenes = result.scalars().all()
+    if not scenes:
+        return {"results": [], "message": "no scenes with embeddings in database"}
+
+    embs = np.array([s.clip_embedding for s in scenes], dtype=np.float32)
+    norms = np.linalg.norm(embs, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    sims = (embs / norms) @ query_emb
+
+    order = np.argsort(sims)[::-1][:limit]
+    return {
+        "results": [
+            {
+                "scene_id": str(scenes[i].id),
+                "clip_name": scenes[i].clip.dateiname if scenes[i].clip else "",
+                "start": round(float(scenes[i].start_zeit), 2),
+                "duration": round(float(scenes[i].dauer), 2),
+                "description": scenes[i].beschreibung,
+                "similarity": round(float(sims[i]), 3),
+            }
+            for i in order
+        ]
+    }
+
+
+async def _tool_list_speakers(args: dict, db: AsyncSession) -> dict:
+    """Liste tous les speakers identifiés dans le projet (label auto + rename manuel)."""
+    from sqlalchemy import func
+    stmt = select(Speaker, Clip.dateiname).join(Clip, Clip.id == Speaker.clip_id).order_by(Speaker.total_speaking_time.desc())
+    result = await db.execute(stmt)
+    rows = result.all()
+    return {
+        "count": len(rows),
+        "speakers": [
+            {
+                "speaker_id": str(sp.id),
+                "clip_name": name,
+                "label_auto": sp.label_auto,
+                "label_manual": sp.label_manual,
+                "display_name": sp.label_manual or sp.label_auto,
+                "total_speaking_time_s": round(sp.total_speaking_time or 0.0, 2),
+                "segment_count": sp.segment_count or 0,
+            }
+            for sp, name in rows
+        ],
+    }
+
+
+async def _tool_filter_by_speaker(args: dict, db: AsyncSession) -> dict:
+    """Retourne les scènes où un speaker donné (par label_manual ou label_auto) apparaît."""
+    name = (args.get("speaker") or "").strip()
+    if not name:
+        return {"error": "speaker (name) is required"}
+    limit = int(args.get("limit") or 20)
+
+    # Résoudre le speaker par label_manual OU label_auto (case-insensitive)
+    from sqlalchemy import or_, func
+    sp_stmt = select(Speaker).where(
+        or_(
+            func.lower(Speaker.label_manual) == name.lower(),
+            func.lower(Speaker.label_auto) == name.lower(),
+        )
+    )
+    sp_result = await db.execute(sp_stmt)
+    speakers = sp_result.scalars().all()
+    if not speakers:
+        # Suggestion : liste des noms dispos
+        all_stmt = select(Speaker.label_manual, Speaker.label_auto)
+        all_result = await db.execute(all_stmt)
+        available = [(m or a) for m, a in all_result.all()]
+        return {
+            "error": f"speaker '{name}' not found",
+            "available": available[:20],
+        }
+
+    speaker_ids = [sp.id for sp in speakers]
+    ss_stmt = (
+        select(SceneSpeaker, Szene, Clip.dateiname)
+        .join(Szene, Szene.id == SceneSpeaker.scene_id)
+        .join(Clip, Clip.id == Szene.clip_id)
+        .where(SceneSpeaker.speaker_id.in_(speaker_ids))
+        .order_by(Szene.szenen_nr)
+        .limit(limit)
+    )
+    ss_result = await db.execute(ss_stmt)
+    rows = ss_result.all()
+    return {
+        "speaker": name,
+        "count": len(rows),
+        "scenes": [
+            {
+                "scene_id": str(sz.id),
+                "clip_name": clip_name,
+                "start": round(float(sz.start_zeit), 2),
+                "duration": round(float(sz.dauer), 2),
+                "speaking_time_in_scene_s": round(ss.speaking_time or 0.0, 2),
+                "description": (sz.beschreibung or "")[:100],
+            }
+            for ss, sz, clip_name in rows
+        ],
+    }
+
+
+async def _tool_rename_speaker(args: dict, db: AsyncSession) -> dict:
+    """Renomme un speaker : label_auto (SPEAKER_00) → label_manual ('Anna').
+
+    Accepte soit un UUID, soit un label_auto ("SPEAKER_00") comme identifiant.
+    """
+    from sqlalchemy import func, or_
+
+    raw_id = (args.get("speaker_id") or args.get("speaker") or "").strip()
+    new_name = (args.get("new_name") or args.get("name") or "").strip()
+    if not raw_id or not new_name:
+        return {"error": "speaker_id (UUID or label like SPEAKER_00) and new_name are required"}
+
+    if _UUID_RE.match(raw_id):
+        result = await db.execute(select(Speaker).where(Speaker.id == raw_id))
+    else:
+        # Résoudre par label_auto ou label_manual (case-insensitive)
+        result = await db.execute(select(Speaker).where(or_(
+            func.lower(Speaker.label_auto) == raw_id.lower(),
+            func.lower(Speaker.label_manual) == raw_id.lower(),
+        )))
+    speakers = result.scalars().all()
+    if not speakers:
+        return {"error": f"speaker '{raw_id}' not found (neither UUID nor label match)"}
+    if len(speakers) > 1:
+        # Ambigu — plusieurs clips ont un SPEAKER_00 : renomme TOUS (comportement voulu ?)
+        # Pour ne pas surprendre, on remonte les candidats et on refuse.
+        return {
+            "error": f"ambiguous speaker '{raw_id}': matches {len(speakers)} rows across clips",
+            "candidates": [
+                {"speaker_id": str(sp.id), "clip_id": str(sp.clip_id), "label_auto": sp.label_auto}
+                for sp in speakers
+            ],
+            "_hint": "Pass a UUID from list_speakers to disambiguate.",
+        }
+
+    sp = speakers[0]
+    old = sp.label_manual
+    sp.label_manual = new_name
+    await db.commit()
+    return {
+        "speaker_id": str(sp.id),
+        "label_auto": sp.label_auto,
+        "old_name": old,
+        "new_name": new_name,
+    }
+
+
+async def _tool_filter_by_framing(args: dict, db: AsyncSession) -> dict:
+    """Filtre les scènes par framing (extreme_closeup, closeup, medium, wide_with_person, wide_no_person). Accepte str ou list[str]."""
+    framing_arg = args.get("framing") or ""
+    min_faces = int(args.get("min_faces") or 0)
+    limit = int(args.get("limit") or 20)
+    valid = {"extreme_closeup", "closeup", "medium", "wide_with_person", "wide_no_person"}
+
+    # Accepte string unique, list, ou string CSV ("closeup,medium")
+    if isinstance(framing_arg, list):
+        framings = [str(f).strip() for f in framing_arg if str(f).strip()]
+    elif isinstance(framing_arg, str):
+        framings = [f.strip() for f in framing_arg.split(",") if f.strip()]
+    else:
+        framings = []
+
+    invalid = [f for f in framings if f not in valid]
+    if invalid:
+        return {"error": f"invalid framing values: {invalid}. Must be from {sorted(valid)}"}
+
+    stmt = select(Szene).options(selectinload(Szene.clip))
+    if framings:
+        stmt = stmt.where(Szene.framing.in_(framings))
+    if min_faces > 0:
+        stmt = stmt.where(Szene.face_count >= min_faces)
+    stmt = stmt.limit(limit)
+    result = await db.execute(stmt)
+    scenes = result.scalars().all()
+    return {
+        "framing_filter": framings or ["(any)"],
+        "min_faces_filter": min_faces,
+        "count": len(scenes),
+        "scenes": [
+            {
+                "scene_id": str(s.id),
+                "clip_name": s.clip.dateiname if s.clip else "",
+                "start": round(float(s.start_zeit), 2),
+                "duration": round(float(s.dauer), 2),
+                "face_count": s.face_count or 0,
+                "framing": s.framing or "unknown",
+                "description": (s.beschreibung or "")[:100],
+            }
+            for s in scenes
+        ],
+    }
+
+
+async def _tool_export_scenes(args: dict, db: AsyncSession) -> dict:
+    """Exporte une sélection de scènes OU des segments custom en FCPXML/OTIO.
+
+    Le fichier est écrit dans ~/Documents/CinAssist_Exports/ et peut être
+    importé dans Premiere Pro, Final Cut Pro X, DaVinci Resolve.
+
+    Deux modes :
+      - scene_ids : exporte les scènes complètes de la DB (ordre respecté)
+      - segments  : exporte des segments custom (produits par remove_silences,
+                    generate_rough_cut, etc.)
+    """
+    scene_ids = args.get("scene_ids") or []
+    segments_arg = args.get("segments") or []
+    fmt = args.get("format", "fcpxml").lower()
+    name = args.get("name", "CinAssist_Timeline")
+
+    if not scene_ids and not segments_arg:
+        return {"error": "either scene_ids (list) or segments (list) is required"}
+    if fmt not in ("fcpxml", "otio"):
+        return {"error": f"format must be 'fcpxml' or 'otio', got '{fmt}'"}
+
+    if segments_arg:
+        # Mode segments : formats attendu {clip_path, clip_name, media_start, duration}
+        segments = []
+        for s in segments_arg:
+            if not isinstance(s, dict):
+                continue
+            if not s.get("clip_path"):
+                continue
+            segments.append({
+                "clip_path": s["clip_path"],
+                "clip_name": s.get("clip_name", "clip"),
+                "media_start": float(s.get("media_start", 0)),
+                "duration": float(s.get("duration", 0)),
+                "track": s.get("track", "v1"),
+            })
+    else:
+        result = await db.execute(
+            select(Szene).options(selectinload(Szene.clip)).where(Szene.id.in_(scene_ids))
+        )
+        scenes = result.scalars().all()
+        if not scenes:
+            return {"error": f"no scenes found for ids {scene_ids}"}
+        by_id = {str(s.id): s for s in scenes}
+        ordered = [by_id[sid] for sid in scene_ids if sid in by_id]
+        segments = []
+        for s in ordered:
+            if not s.clip or not s.clip.dateipfad:
+                continue
+            segments.append({
+                "clip_path": s.clip.dateipfad,
+                "clip_name": s.clip.dateiname,
+                "media_start": float(s.start_zeit),
+                "duration": float(s.dauer),
+                "track": "v1",
+            })
+
+    if not segments:
+        return {"error": "no valid segments (missing clip paths)"}
+
+    try:
+        info = _otio_export_to_file(segments, format=fmt, name=name)
+    except Exception as e:
+        logger.exception("OTIO export failed")
+        return {"error": f"Export failed: {e}"}
+    return info
+
+
+import re
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+async def _resolve_clip_ids(db: AsyncSession, ids_or_names) -> list[str]:
+    """Résout une liste mixte d'UUIDs et de noms de fichiers en UUIDs uniquement.
+
+    - Si l'entrée est un UUID valide → passe tel quel.
+    - Sinon → recherche par `dateiname ILIKE %name%` en DB.
+    """
+    if isinstance(ids_or_names, str):
+        ids_or_names = [ids_or_names]
+    if not ids_or_names:
+        return []
+    out: list[str] = []
+    for x in ids_or_names:
+        s = str(x).strip()
+        if not s:
+            continue
+        if _UUID_RE.match(s):
+            out.append(s)
+            continue
+        # Recherche par nom
+        r = await db.execute(
+            select(Clip.id).where(Clip.dateiname.ilike(f"%{s}%"))
+        )
+        matches = [str(row[0]) for row in r.all()]
+        out.extend(matches)
+    return list(dict.fromkeys(out))  # dedup preserving order
+
+
+async def _fetch_scenes_for_cleanup(db: AsyncSession, scene_ids: list[str] | None, clip_ids: list[str] | None) -> list[dict]:
+    """Fetch scenes as dict for cleanup helpers (attaches clip info)."""
+    stmt = select(Szene).options(selectinload(Szene.clip))
+    if scene_ids:
+        stmt = stmt.where(Szene.id.in_(scene_ids))
+    elif clip_ids:
+        stmt = stmt.where(Szene.clip_id.in_(clip_ids))
+    result = await db.execute(stmt.order_by(Szene.clip_id, Szene.szenen_nr))
+    scenes = result.scalars().all()
+    out = []
+    for s in scenes:
+        out.append({
+            "id": str(s.id),
+            "start_zeit": float(s.start_zeit),
+            "end_zeit": float(s.end_zeit),
+            "transkription_json": s.transkription_json,
+            "clip": {
+                "dateipfad": s.clip.dateipfad if s.clip else None,
+                "dateiname": s.clip.dateiname if s.clip else "",
+            },
+        })
+    return out
+
+
+async def _tool_remove_silences(args: dict, db: AsyncSession) -> dict:
+    """Entfernt lange Stillen und gibt exportbereite Segmente zurück."""
+    from backend.core.cleanup import remove_silences_from_scenes
+
+    scene_ids = args.get("scene_ids")
+    clip_ids = args.get("clip_ids")
+    min_silence_ms = int(args.get("min_silence_ms") or 800)
+    keep_margin_ms = int(args.get("keep_margin_ms") or 150)
+
+    if not scene_ids and not clip_ids:
+        return {"error": "either scene_ids or clip_ids is required"}
+
+    # Résoudre noms de clips → UUIDs
+    if clip_ids:
+        clip_ids = await _resolve_clip_ids(db, clip_ids)
+        if not clip_ids:
+            return {"error": "no matching clips found for provided names/ids"}
+
+    scenes = await _fetch_scenes_for_cleanup(db, scene_ids, clip_ids)
+    if not scenes:
+        return {"error": "no scenes found"}
+
+    result = remove_silences_from_scenes(
+        scenes, min_silence_ms=min_silence_ms, keep_margin_ms=keep_margin_ms
+    )
+    # Truncate segments in observation to avoid huge payloads
+    truncated = result.copy()
+    truncated["segment_count"] = len(truncated["segments"])
+    truncated["segments_preview"] = truncated["segments"][:5]
+    del truncated["segments"]
+    # Attach a stash key so export_scenes can pull the full segments back
+    await _stash_write(args.get("_stash_id", "last"), result["segments"], db)
+    truncated["stash_id"] = "last"
+    truncated["_hint"] = "Call export_scenes with {segments: <segments from previous obs>} to export."
+    return truncated
+
+
+async def _tool_find_hesitations(args: dict, db: AsyncSession) -> dict:
+    """Erkennt 'ähm', 'euh', 'um', Wiederholungen in den Transkripten."""
+    from backend.core.cleanup import find_hesitations_in_scenes
+
+    scene_ids = args.get("scene_ids")
+    clip_ids = args.get("clip_ids")
+    if not scene_ids and not clip_ids:
+        # Défaut : tous les clips analysés
+        r = await db.execute(select(Clip.id).where(Clip.status == "analysiert"))
+        clip_ids = [str(c) for (c,) in r.all()]
+        if not clip_ids:
+            return {"error": "no analyzed clips"}
+    elif clip_ids:
+        clip_ids = await _resolve_clip_ids(db, clip_ids)
+    scenes = await _fetch_scenes_for_cleanup(db, scene_ids, clip_ids)
+    if not scenes:
+        return {"error": "no scenes found"}
+    return find_hesitations_in_scenes(scenes)
+
+
+# ─── Stash für Segmente zwischen Tool-Calls ─────────────────
+# L'agent produit des segments avec remove_silences/generate_rough_cut puis les
+# passe à export_scenes/render_video. Persistance à 2 niveaux :
+#   - RAM : lookup rapide pour l'itération courante (perdue au restart)
+#   - DB `timelines` : persistant, survit au restart, permet reprise ultérieure
+_SEGMENT_STASH: dict[str, list[dict]] = {}
+_STASH_TIMELINE_PREFIX = "_stash:"  # nom en DB : "_stash:last"
+
+
+async def _stash_write(stash_id: str, segments: list[dict], db: AsyncSession) -> None:
+    """Écrit en RAM + persist dans la table timelines (name = '_stash:{id}')."""
+    from backend.core.database import Timeline
+    _SEGMENT_STASH[stash_id] = segments
+    total = sum(float(s.get("duration", 0)) for s in segments)
+    name = f"{_STASH_TIMELINE_PREFIX}{stash_id}"
+    # Upsert : cherche timeline existante par nom, sinon crée
+    r = await db.execute(select(Timeline).where(Timeline.name == name))
+    tl = r.scalar_one_or_none()
+    payload = {
+        "segmente": segments,
+        "gesamtdauer": total,
+        "stash_id": stash_id,
+    }
+    if tl:
+        tl.daten = payload
+        tl.gesamtdauer = total
+    else:
+        db.add(Timeline(name=name, daten=payload, gesamtdauer=total))
+    await db.commit()
+
+
+async def _stash_read(stash_id: str, db: AsyncSession) -> list[dict] | None:
+    """Lit d'abord la RAM, puis la DB si absent."""
+    from backend.core.database import Timeline
+    if stash_id in _SEGMENT_STASH:
+        return _SEGMENT_STASH[stash_id]
+    name = f"{_STASH_TIMELINE_PREFIX}{stash_id}"
+    r = await db.execute(select(Timeline).where(Timeline.name == name))
+    tl = r.scalar_one_or_none()
+    if tl and isinstance(tl.daten, dict):
+        segs = tl.daten.get("segmente") or []
+        if segs:
+            _SEGMENT_STASH[stash_id] = segs  # recharge en RAM
+            return segs
+    return None
+
+
+async def _tool_generate_rough_cut(args: dict, db: AsyncSession) -> dict:
+    """Generiert einen Rohschnitt Freytag/Beam aus einem oder mehreren Clips.
+
+    Kapselt die bestehende wissenschaftliche Pipeline (ai.py :: /api/ai/cut) und
+    gibt exportbereite Segmente zurück (im Stash für export_last_cleanup).
+    """
+    raw_clip_ids = args.get("clip_ids") or []
+    # Normalise : "*", "all", string, ou list contenant wildcards → fallback tous clips
+    if isinstance(raw_clip_ids, str):
+        raw_clip_ids = [raw_clip_ids]
+    raw_clip_ids = [str(x).strip() for x in raw_clip_ids if x]
+    is_wildcard = any(x in ("*", "all", "tous", "alle") for x in raw_clip_ids)
+
+    if raw_clip_ids and not is_wildcard:
+        # Résoudre nom → UUID si nécessaire
+        clip_ids = await _resolve_clip_ids(db, raw_clip_ids)
+    else:
+        clip_ids = []
+
+    if not clip_ids:
+        # Fallback: prendre TOUS les clips analysés
+        r = await db.execute(select(Clip.id).where(Clip.status == "analysiert"))
+        clip_ids = [str(cid) for (cid,) in r.all()]
+        if not clip_ids:
+            return {"error": "no analyzed clips in project"}
+
+    style = args.get("style", "kinematisch")  # kinematisch|dynamisch|ruhig|energisch
+    prompt = args.get("prompt")
+    max_scenes = args.get("max_scenes")
+    quality_threshold = float(args.get("quality_threshold") or 0.0)
+
+    body = {
+        "stil": style,
+        "prompt": prompt,
+        "clip_ids": clip_ids,
+        "provider": "ollama",
+        "llm_aktiviert": False,  # deterministic pour l'agent
+        "qualitaet_schwelle": quality_threshold,
+        "mit_uebergaengen": False,
+    }
+    if max_scenes:
+        body["max_szenen"] = int(max_scenes)
+
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post("http://localhost:8001/api/ai/cut", json=body)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        logger.exception("generate_rough_cut failed")
+        return {"error": f"cut pipeline failed: {e}"}
+
+    # Extraire segments compatibles OTIO export (structure ai/cut : data.daten.segmente)
+    daten = data.get("daten", {}) or {}
+    raw_segments = daten.get("segmente") or daten.get("segments") or data.get("segmente") or []
+    # Filtrer seulement les segments vidéo (track v1)
+    raw_segments = [s for s in raw_segments if str(s.get("track", "")).lower().startswith("v")]
+    if not raw_segments:
+        return {"error": "cut produced no video segments", "raw_response_keys": list(data.keys()), "daten_keys": list(daten.keys())}
+
+    # Résolution clip_path via clips en DB (les segments ont clip_id)
+    clip_id_set = {s.get("clip_id") for s in raw_segments if s.get("clip_id")}
+    if clip_id_set:
+        r2 = await db.execute(select(Clip).where(Clip.id.in_(list(clip_id_set))))
+        clip_by_id = {str(c.id): c for c in r2.scalars().all()}
+    else:
+        clip_by_id = {}
+
+    export_segments: list[dict] = []
+    for seg in raw_segments:
+        cid = seg.get("clip_id")
+        clip = clip_by_id.get(str(cid)) if cid else None
+        if not clip or not clip.dateipfad:
+            continue
+        media_start = float(seg.get("mediaStart", seg.get("media_start", seg.get("start_zeit", 0.0))))
+        duration = float(seg.get("dauer", seg.get("duration", 0.0)))
+        if duration <= 0:
+            continue
+        export_segments.append({
+            "clip_path": clip.dateipfad,
+            "clip_name": clip.dateiname,
+            "media_start": media_start,
+            "duration": duration,
+            "src_scene_id": seg.get("id", ""),
+        })
+
+    await _stash_write("last", export_segments, db)
+    total_duration = sum(s["duration"] for s in export_segments)
+    return {
+        "segment_count": len(export_segments),
+        "total_duration_s": round(total_duration, 2),
+        "style": style,
+        "prompt": prompt,
+        "segments_preview": export_segments[:5],
+        "stash_id": "last",
+        "_hint": "Segments stashés. Utilise export_last_cleanup pour FCPXML.",
+    }
+
+
+async def _tool_render_video(args: dict, db: AsyncSession) -> dict:
+    """Rend un MP4 depuis des segments avec aspect ratio et optional subtitles burnt."""
+    from backend.core.render import render_mp4, _srt_from_whisper_segments
+
+    stash_id = args.get("stash_id", "last")
+    segments = args.get("segments") or await _stash_read(stash_id, db)
+    if not segments:
+        return {"error": "no segments (pass segments or use stash from a previous tool)"}
+
+    aspect = args.get("aspect_ratio", "16:9")
+    name = args.get("name", "CinAssist_Render")
+    burn_subs = bool(args.get("burn_subtitles", False))
+
+    srt_str: str | None = None
+    if burn_subs:
+        # Concatène les segments Whisper de toutes les scènes utilisées, réalignés
+        # sur la timeline finale (offset cumulatif de chaque segment).
+        # On charge les scènes correspondantes en DB via src_scene_id.
+        scene_ids = [s.get("src_scene_id") for s in segments if s.get("src_scene_id")]
+        srt_pieces: list[str] = []
+        cumulative = 0.0
+        if scene_ids:
+            r = await db.execute(select(Szene).where(Szene.id.in_(scene_ids)))
+            scene_by_id = {str(sc.id): sc for sc in r.scalars().all()}
+            for seg in segments:
+                sid = seg.get("src_scene_id")
+                sc = scene_by_id.get(str(sid)) if sid else None
+                if sc and sc.transkription_json:
+                    raw = sc.transkription_json
+                    if isinstance(raw, dict):
+                        raw = raw.get("segmente") or raw.get("segments") or []
+                    # Filter segments qui tombent dans [media_start, media_start+duration]
+                    seg_start = seg["media_start"]
+                    seg_end = seg_start + seg["duration"]
+                    speech: list[dict] = []
+                    for w in raw:
+                        if isinstance(w, dict):
+                            ws = float(w.get("start", 0))
+                            we = float(w.get("end", 0))
+                            if we > seg_start and ws < seg_end:
+                                # Décale à la timeline finale
+                                speech.append({
+                                    "start": max(0, ws - seg_start),
+                                    "end": max(0, we - seg_start),
+                                    "text": w.get("text", ""),
+                                })
+                    if speech:
+                        srt_pieces.append(_srt_from_whisper_segments(speech, time_offset=cumulative))
+                cumulative += seg["duration"]
+        srt_str = "\n".join(srt_pieces) or None
+
+    try:
+        info = render_mp4(
+            segments,
+            aspect_ratio=aspect,
+            name=name,
+            subtitles_srt=srt_str,
+        )
+    except Exception as e:
+        logger.exception("render_video failed")
+        return {"error": f"render failed: {e}"}
+    return info
+
+
+async def _tool_detect_beats(args: dict, db: AsyncSession) -> dict:
+    """Erkennt BPM und Beat-Positionen in einem Clip (via librosa). Persona Musikvideo-Cutter."""
+    from backend.core.render import detect_beats
+
+    clip_id = args.get("clip_id") or args.get("clip_name")
+    if not clip_id:
+        return {"error": "clip_id (UUID) or clip_name is required"}
+    # Résoudre nom → UUID si nécessaire
+    resolved = await _resolve_clip_ids(db, [clip_id])
+    if not resolved:
+        return {"error": f"clip '{clip_id}' not found (neither UUID nor filename match)"}
+    r = await db.execute(select(Clip).where(Clip.id == resolved[0]))
+    clip = r.scalar_one_or_none()
+    if not clip or not clip.dateipfad:
+        return {"error": f"clip {clip_id} not found"}
+    result = detect_beats(clip.dateipfad)
+    # Truncate beat_times si trop long
+    if "beat_times_s" in result and len(result["beat_times_s"]) > 30:
+        result["beat_times_preview"] = result["beat_times_s"][:15]
+        result["beat_times_full_count"] = len(result["beat_times_s"])
+        del result["beat_times_s"]
+    return result
+
+
+async def _tool_rediarize_clip(args: dict, db: AsyncSession) -> dict:
+    """Refait la diarization d'un clip avec des hints (num_speakers, min_speaker_time).
+
+    Utile quand pyannote sur-segmente : ex. MLK "I Have A Dream" détecté avec
+    3 speakers alors qu'il n'y a qu'un orateur → passe `num_speakers=1`.
+
+    Remplace en DB les rows Speaker/SceneSpeaker existantes du clip.
+    """
+    from sqlalchemy import delete as sql_delete
+    from backend.core.database import SceneSpeaker as SS, Speaker as SP
+    from backend.core.diarize import diarize_audio, summarize_by_speaker, match_speakers_to_scenes
+    import subprocess, tempfile, os
+
+    clip_arg = args.get("clip_id") or args.get("clip_name")
+    if not clip_arg:
+        return {"error": "clip_id (UUID) or clip_name is required"}
+    resolved = await _resolve_clip_ids(db, [clip_arg])
+    if not resolved:
+        return {"error": f"clip '{clip_arg}' not found"}
+    clip_id = resolved[0]
+    r = await db.execute(select(Clip).where(Clip.id == clip_id))
+    clip = r.scalar_one_or_none()
+    if not clip or not clip.dateipfad:
+        return {"error": f"clip {clip_id} has no file path"}
+
+    num_speakers = args.get("num_speakers")
+    min_speakers = args.get("min_speakers")
+    max_speakers = args.get("max_speakers")
+    min_speaker_time_s = float(args.get("min_speaker_time_s") or 3.0)
+
+    # Extract audio to a temp WAV mono 16kHz (pyannote-friendly)
+    # NamedTemporaryFile évite le TOCTOU race de mktemp() deprecated.
+    from backend.core.config import TEMP_DIR
+    with tempfile.NamedTemporaryFile(prefix="cinassist_rediarize_", suffix=".wav",
+                                     dir=str(TEMP_DIR), delete=False) as tf:
+        tmp_audio = tf.name
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-i", clip.dateipfad, "-vn", "-ac", "1", "-ar", "16000",
+             "-f", "wav", tmp_audio],
+            capture_output=True, timeout=120,
+        )
+        if proc.returncode != 0 or not os.path.exists(tmp_audio):
+            return {"error": f"audio extraction failed: {proc.stderr.decode('utf-8', 'replace')[-300:]}"}
+
+        result = diarize_audio(
+            tmp_audio,
+            num_speakers=int(num_speakers) if num_speakers else None,
+            min_speakers=int(min_speakers) if min_speakers else None,
+            max_speakers=int(max_speakers) if max_speakers else None,
+            min_speaker_time_s=min_speaker_time_s,
+        )
+    finally:
+        try: os.unlink(tmp_audio)
+        except OSError: pass
+
+    if not result.get("available"):
+        return {"error": result.get("error") or "diarization not available"}
+
+    # Purge et re-persist
+    await db.execute(sql_delete(SS).where(
+        SS.speaker_id.in_(select(SP.id).where(SP.clip_id == clip_id))
+    ))
+    await db.execute(sql_delete(SP).where(SP.clip_id == clip_id))
+    await db.flush()
+
+    summary = summarize_by_speaker(result["segments"])
+    speaker_by_label: dict[str, SP] = {}
+    for label, agg in summary.items():
+        sp = SP(
+            clip_id=clip_id,
+            label_auto=label,
+            total_speaking_time=agg["total_time"],
+            segment_count=agg["segment_count"],
+        )
+        db.add(sp)
+        speaker_by_label[label] = sp
+    await db.flush()
+
+    # Réassigne scene_speakers
+    r2 = await db.execute(
+        select(Szene).where(Szene.clip_id == clip_id).order_by(Szene.szenen_nr)
+    )
+    scenes = r2.scalars().all()
+    scene_ranges = [(float(s.start_zeit), float(s.end_zeit)) for s in scenes]
+    overlaps = match_speakers_to_scenes(result["segments"], scene_ranges)
+    for szene, by_speaker in zip(scenes, overlaps):
+        for label, dur in by_speaker.items():
+            sp = speaker_by_label.get(label)
+            if sp and dur > 0:
+                db.add(SS(scene_id=szene.id, speaker_id=sp.id, speaking_time=dur))
+    await db.commit()
+
+    return {
+        "clip_id": clip_id,
+        "clip_name": clip.dateiname,
+        "total_speakers": result["total_speakers"],
+        "filtered_out_below_min_time": result["filtered_out"],
+        "hint_used": result["hint_used"],
+        "min_speaker_time_s": min_speaker_time_s,
+        "speakers": [
+            {
+                "label_auto": sp.label_auto,
+                "total_speaking_time_s": round(sp.total_speaking_time or 0.0, 2),
+                "segment_count": sp.segment_count,
+            }
+            for sp in speaker_by_label.values()
+        ],
+    }
+
+
+async def _tool_retranscribe_clip(args: dict, db: AsyncSession) -> dict:
+    """Refait la transcription Whisper d'un clip existant avec language=auto.
+
+    Utile après le fix language=None : les clips ingérés avant ont été forcés
+    en 'de' et les vidéos EN (Snowden, MLK) n'avaient pas de transcription.
+    Met à jour transkription + transkription_json des scènes overlapping avec
+    les segments Whisper. Ne touche pas au reste (CLIP, faces, speakers).
+    """
+    from backend.core.config import WHISPER_MODEL, TEMP_DIR
+    import subprocess, os
+
+    clip_arg = args.get("clip_id") or args.get("clip_name")
+    if not clip_arg:
+        return {"error": "clip_id (UUID) or clip_name is required"}
+    resolved = await _resolve_clip_ids(db, [clip_arg])
+    if not resolved:
+        return {"error": f"clip '{clip_arg}' not found"}
+    clip_id = resolved[0]
+    r = await db.execute(select(Clip).where(Clip.id == clip_id))
+    clip = r.scalar_one_or_none()
+    if not clip or not clip.dateipfad:
+        return {"error": f"clip {clip_id} has no file path"}
+
+    language = args.get("language")  # None → auto-detect (recommandé)
+
+    # Pré-check : le clip a-t-il de l'audio ?
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=codec_type", "-of", "csv=p=0", clip.dateipfad],
+        capture_output=True, text=True, timeout=10,
+    )
+    if not (probe.returncode == 0 and "audio" in (probe.stdout or "").lower()):
+        return {
+            "clip_id": clip_id,
+            "clip_name": clip.dateiname,
+            "skipped": True,
+            "reason": "Clip hat keine Audiospur — Transkription übersprungen.",
+        }
+
+    with tempfile.NamedTemporaryFile(prefix="cinassist_retrans_", suffix=".wav",
+                                     dir=str(TEMP_DIR), delete=False) as tf:
+        tmp_audio = tf.name
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-y", "-i", clip.dateipfad, "-vn", "-ac", "1", "-ar", "16000",
+             "-f", "wav", tmp_audio],
+            capture_output=True, timeout=180,
+        )
+        if proc.returncode != 0 or not os.path.exists(tmp_audio):
+            return {"error": f"audio extraction failed: {proc.stderr.decode('utf-8', 'replace')[-300:]}"}
+
+        try:
+            import mlx_whisper
+        except ImportError:
+            return {"error": "mlx_whisper not installed"}
+
+        result = mlx_whisper.transcribe(
+            tmp_audio,
+            path_or_hf_repo=WHISPER_MODEL,
+            language=language,
+            word_timestamps=True,
+        )
+    finally:
+        try: os.unlink(tmp_audio)
+        except OSError: pass
+
+    text = (result.get("text") or "").strip()
+    detected_lang = result.get("language", "?")
+    segments = [{
+        "start": round(seg["start"], 3),
+        "end": round(seg["end"], 3),
+        "text": seg["text"].strip(),
+        "woerter": [
+            {"wort": w["word"].strip(),
+             "start": round(w["start"], 3),
+             "end": round(w["end"], 3)}
+            for w in seg.get("words", [])
+        ],
+    } for seg in result.get("segments", [])]
+
+    # Mettre à jour les szenen : trouver chaque overlap
+    r2 = await db.execute(select(Szene).where(Szene.clip_id == clip_id).order_by(Szene.szenen_nr))
+    scenes = r2.scalars().all()
+    updated = 0
+    for sc in scenes:
+        seg_text = ""
+        seg_json = []
+        for seg in segments:
+            if seg["start"] < float(sc.end_zeit) and seg["end"] > float(sc.start_zeit):
+                seg_text += seg["text"] + " "
+                seg_json.append(seg)
+        new_text = seg_text.strip() or None
+        if new_text != sc.transkription:
+            sc.transkription = new_text
+            sc.transkription_json = seg_json or None
+            updated += 1
+    await db.commit()
+
+    return {
+        "clip_id": clip_id,
+        "clip_name": clip.dateiname,
+        "detected_language": detected_lang,
+        "text_length_chars": len(text),
+        "segment_count": len(segments),
+        "scenes_updated": updated,
+        "text_preview": text[:300],
+    }
+
+
+async def _tool_cluster_speakers_across_clips(args: dict, db: AsyncSession) -> dict:
+    """Erkennt dieselbe Person cross-clip via pyannote-Voice-Embeddings + Cosine-Clustering.
+
+    Sammelt für jeden speaker den längsten Rede-Ausschnitt, berechnet den 512-dim
+    Voice-Embedding, gruppiert per Cosine-Similarity (Threshold default 0.75).
+    """
+    from backend.core.speaker_cluster import cluster_speakers
+    from backend.core.config import TEMP_DIR
+
+    threshold = float(args.get("similarity_threshold") or 0.75)
+    apply_labels = bool(args.get("apply_labels", False))
+
+    # Alle Speaker + zugehörige Szenen holen
+    r = await db.execute(
+        select(Speaker, Clip.dateiname, Clip.dateipfad)
+        .join(Clip, Clip.id == Speaker.clip_id)
+        .where(Speaker.total_speaking_time.isnot(None))
+    )
+    rows = r.all()
+    if len(rows) < 2:
+        return {"error": "mindestens 2 Speaker mit Redezeit erforderlich"}
+
+    # Pour chaque speaker, trouve la scene où il parle le plus longtemps
+    speakers_info: list[dict] = []
+    for sp, dateiname, dateipfad in rows:
+        if not dateipfad:
+            continue
+        r2 = await db.execute(
+            select(SceneSpeaker, Szene)
+            .join(Szene, Szene.id == SceneSpeaker.scene_id)
+            .where(SceneSpeaker.speaker_id == sp.id)
+            .order_by(SceneSpeaker.speaking_time.desc())
+            .limit(1)
+        )
+        best = r2.first()
+        if not best:
+            continue
+        _, sc = best
+        speakers_info.append({
+            "speaker_id": str(sp.id),
+            "clip_id": str(sp.clip_id),
+            "clip_name": dateiname,
+            "clip_path": dateipfad,
+            "start_s": float(sc.start_zeit),
+            "duration_s": min(float(sc.dauer), 20.0),  # max 20s pour l'embedding
+            "label_auto": sp.label_auto,
+            "label_manual": sp.label_manual,
+        })
+
+    if len(speakers_info) < 2:
+        return {"error": f"nur {len(speakers_info)} Speaker mit auswertbarem Ausschnitt"}
+
+    result = cluster_speakers(speakers_info, TEMP_DIR, similarity_threshold=threshold)
+
+    if apply_labels and "clusters" in result:
+        # Applique le suggested_label comme label_manual à tous les speakers du cluster
+        renamed = 0
+        for cluster in result["clusters"]:
+            if cluster["speaker_count"] < 2:
+                continue  # Ne pas renommer les speakers seuls
+            new_label = cluster["suggested_label"]
+            for sid in cluster["speaker_ids"]:
+                r3 = await db.execute(select(Speaker).where(Speaker.id == sid))
+                sp = r3.scalar_one_or_none()
+                if sp and sp.label_manual != new_label:
+                    sp.label_manual = new_label
+                    renamed += 1
+        await db.commit()
+        result["speakers_renamed"] = renamed
+
+    return result
+
+
+async def _tool_sync_multicam(args: dict, db: AsyncSession) -> dict:
+    """Berechnet Audio-Sync-Offsets zwischen mehreren Multicam-Clips (Master-Winkel + weitere).
+
+    Für Interview- / Doku-Setups mit mehreren Kameras, die zeitgleich aufnehmen
+    und dasselbe Audio (mit leichten Positionsverschiebungen) haben.
+    """
+    from backend.core.multicam_sync import sync_clips
+    from backend.core.config import TEMP_DIR
+
+    raw_ids = args.get("clip_ids") or []
+    if isinstance(raw_ids, str):
+        raw_ids = [raw_ids]
+    if len(raw_ids) < 2:
+        return {"error": "sync benötigt mindestens 2 clip_ids"}
+
+    resolved = await _resolve_clip_ids(db, raw_ids)
+    if len(resolved) < 2:
+        return {"error": f"nur {len(resolved)} Clip(s) gefunden für {raw_ids}"}
+
+    r = await db.execute(select(Clip).where(Clip.id.in_(resolved)))
+    clips_by_id = {str(c.id): c for c in r.scalars().all()}
+    clip_paths = []
+    for cid in resolved:
+        c = clips_by_id.get(cid)
+        if c and c.dateipfad:
+            clip_paths.append((cid, c.dateipfad))
+
+    if len(clip_paths) < 2:
+        return {"error": "zu wenige Clips mit Dateipfad"}
+
+    result = sync_clips(clip_paths, TEMP_DIR)
+    # Bereichere mit Dateinamen für Lesbarkeit
+    for entry in result.get("offsets", []):
+        c = clips_by_id.get(entry.get("clip_id"))
+        if c:
+            entry["clip_name"] = c.dateiname
+    master = clips_by_id.get(result.get("master_clip_id"))
+    if master:
+        result["master_clip_name"] = master.dateiname
+    return result
+
+
+async def _tool_export_last_cleanup(args: dict, db: AsyncSession) -> dict:
+    """Exportiert das Ergebnis des letzten remove_silences (via Stash) als FCPXML."""
+    stash_id = args.get("stash_id", "last")
+    fmt = (args.get("format") or "fcpxml").lower()
+    name = args.get("name", "CinAssist_Cleaned")
+    segments = await _stash_read(stash_id, db)
+    if not segments:
+        return {"error": f"no stashed segments for id '{stash_id}'. Run remove_silences first."}
+    if fmt not in ("fcpxml", "otio"):
+        return {"error": f"format must be 'fcpxml' or 'otio'"}
+    try:
+        info = _otio_export_to_file(segments, format=fmt, name=name)
+    except Exception as e:
+        return {"error": f"Export failed: {e}"}
+    info["segment_count"] = len(segments)
+    return info
+
+
+# ─── Registry ────────────────────────────────────────────────
+TOOLS: dict[str, Tool] = {
+    "list_clips": Tool(
+        name="list_clips",
+        description="Listet alle im Projekt hochgeladenen Video-Clips mit Dauer und Anzahl Szenen.",
+        args_schema={},
+        handler=_tool_list_clips,
+    ),
+    "search_scenes_by_prompt": Tool(
+        name="search_scenes_by_prompt",
+        description="Sucht Szenen anhand einer natürlichsprachlichen Beschreibung (semantische CLIP-Textsuche). Beispiele: 'wide drone shot', 'person talking close-up', 'coffee being poured'.",
+        args_schema={
+            "query": "str — Beschreibung auf Deutsch oder Englisch dessen, was gesucht wird",
+            "limit": "int — max. Anzahl Ergebnisse (Default 5)",
+        },
+        handler=_tool_search_scenes_by_prompt,
+    ),
+    "list_speakers": Tool(
+        name="list_speakers",
+        description="Listet alle im Projekt identifizierten Sprecher (unterscheidbare Stimmen). Jeder hat ein label_auto (SPEAKER_00) und ggf. ein label_manual ('Anna'), falls vom Nutzer umbenannt.",
+        args_schema={},
+        handler=_tool_list_speakers,
+    ),
+    "filter_by_speaker": Tool(
+        name="filter_by_speaker",
+        description="Gibt die Szenen zurück, in denen ein bestimmter Sprecher vorkommt. Nutze den exakten Namen (label_manual wie 'Anna' oder label_auto wie 'SPEAKER_00').",
+        args_schema={
+            "speaker": "str — Name des Sprechers (Anna, Marc, SPEAKER_00…)",
+            "limit": "int — max. Anzahl Szenen (Default 20)",
+        },
+        handler=_tool_filter_by_speaker,
+    ),
+    "rename_speaker": Tool(
+        name="rename_speaker",
+        description="Benennt einen Sprecher um (gibt SPEAKER_00 einen echten Namen). Der Nutzer hört eine Szene und sagt dir 'SPEAKER_00 ist Anna' → du rufst dieses Tool auf.",
+        args_schema={
+            "speaker_id": "str — UUID oder label_auto (z. B. 'SPEAKER_00') aus list_speakers",
+            "new_name": "str — neuer lesbarer Name ('Anna', 'Marc'…)",
+        },
+        handler=_tool_rename_speaker,
+    ),
+    "filter_by_framing": Tool(
+        name="filter_by_framing",
+        description="Filtert Szenen nach Bildeinstellung (Framing). Akzeptiert eine oder mehrere Einstellungen auf einmal. Bsp.: für 'Nahaufnahmen ODER Halbtotale' übergib ['closeup','medium'].",
+        args_schema={
+            "framing": "str | list[str] — eines oder mehrere von: extreme_closeup, closeup, medium, wide_with_person, wide_no_person",
+            "min_faces": "int — Mindestanzahl Gesichter (Default 0)",
+            "limit": "int — max. Anzahl zurückgegebener Szenen (Default 20)",
+        },
+        handler=_tool_filter_by_framing,
+    ),
+    "export_scenes": Tool(
+        name="export_scenes",
+        description="Exportiert Szenen ODER benutzerdefinierte Segmente nach FCPXML/OTIO (Premiere/FCP/Resolve). Datei in ~/Documents/CinAssist_Exports/. Nutze scene_ids für ganze Szenen, oder segments für Custom (z. B. aus remove_silences).",
+        args_schema={
+            "scene_ids": "list[str] — UUIDs der Szenen in gewünschter chronologischer Reihenfolge (einfacher Modus)",
+            "segments": "list[dict] — Custom-Segmente {clip_path, clip_name, media_start, duration} (erweiterter Modus)",
+            "format": "str — 'fcpxml' (Premiere/FCP/Resolve) oder 'otio' (JSON OpenTimelineIO)",
+            "name": "str — Name der Ausgabedatei",
+        },
+        handler=_tool_export_scenes,
+    ),
+    "remove_silences": Tool(
+        name="remove_silences",
+        description="Entfernt lange Stillen aus den angegebenen Szenen oder Clips. Gibt exportbereite Sprech-Segmente zurück (kombinierbar mit export_last_cleanup). Nutzt Whisper-Timestamps aus der DB. Feature Nr. 1 für Profi-Cutter (Descript-artig).",
+        args_schema={
+            "scene_ids": "list[str] — konkrete Szenen (mutex zu clip_ids)",
+            "clip_ids": "list[str] — kompletter Clip (mutex zu scene_ids)",
+            "min_silence_ms": "int — Mindestdauer einer Stille zum Schneiden (Default 800)",
+            "keep_margin_ms": "int — vorher/nachher zu behaltender Puffer (Default 150)",
+        },
+        handler=_tool_remove_silences,
+    ),
+    "find_hesitations": Tool(
+        name="find_hesitations",
+        description="Erkennt 'ähm', 'euh', 'um', unmittelbare Wiederholungen in den Transkripten. Nützlich, um vor einem echten Cut abzuschätzen, wie viel Zeit gespart werden kann.",
+        args_schema={
+            "scene_ids": "list[str] — konkrete Szenen (mutex zu clip_ids)",
+            "clip_ids": "list[str] — kompletter Clip",
+        },
+        handler=_tool_find_hesitations,
+    ),
+    "render_video": Tool(
+        name="render_video",
+        description="Rendert ein finales MP4 aus Segmenten (direkt übergeben oder aus dem letzten Stash). Unterstützt Seitenverhältnis (16:9, 9:16, 1:1) und Whisper-Untertitel als Burnt-in. Für Social-Deliverables oder Preview.",
+        args_schema={
+            "segments": "list[dict] — Custom-Segmente (optional, falls Stash vorhanden)",
+            "stash_id": "str — ID des zu nutzenden Stashes (Default 'last')",
+            "aspect_ratio": "str — '16:9' (Default) | '9:16' (mobil) | '1:1' (quadratisch)",
+            "name": "str — Name der Ausgabedatei",
+            "burn_subtitles": "bool — Whisper-Untertitel ins Video brennen (Default false)",
+        },
+        handler=_tool_render_video,
+    ),
+    "detect_beats": Tool(
+        name="detect_beats",
+        description="Analysiert einen Clip auf BPM und Beat-Positionen (librosa). Nützlich, um Schnitte auf die Musik zu setzen (Persona Musikvideo-Cutter).",
+        args_schema={
+            "clip_id": "str — UUID oder Name des zu analysierenden Clips",
+        },
+        handler=_tool_detect_beats,
+    ),
+    "generate_rough_cut": Tool(
+        name="generate_rough_cut",
+        description="Generiert einen KI-Rohschnitt aus deinen Rushes (Pipeline Freytag + Beam Search + Energie). Gibt exportbereite Segmente zurück. Kreatives Herzstück von CinAssist.",
+        args_schema={
+            "clip_ids": "list[str] — zu schneidende Clips (Default: alle analysierten Clips)",
+            "style": "str — 'kinematisch' (Default) | 'dynamisch' | 'ruhig' | 'energisch'",
+            "prompt": "str — freie Angabe zu Ton/Thema des Schnitts ('energischer 30s-Teaser')",
+            "max_scenes": "int — max. Anzahl Szenen in der finalen Timeline",
+            "quality_threshold": "float — 0.0-1.0, Mindest-Energie-Schwelle zur Aufnahme einer Szene",
+        },
+        handler=_tool_generate_rough_cut,
+    ),
+    "retranscribe_clip": Tool(
+        name="retranscribe_clip",
+        description="Wiederholt die Whisper-Transkription eines Clips mit language='auto' (Default). Nützlich für Clips, die vor dem language=None-Fix mit erzwungener DE-Sprache transkribiert wurden (z. B. englische Videos wie Snowden/MLK, die dadurch leer blieben). Aktualisiert transkription der Szenen. Ändert nichts an CLIP-Embeddings, Faces oder Speakern.",
+        args_schema={
+            "clip_id": "str — UUID oder Name des Clips",
+            "language": "str — Sprach-Hint (z. B. 'en', 'de', 'fr'). Default: null → auto-detect.",
+        },
+        handler=_tool_retranscribe_clip,
+    ),
+    "rediarize_clip": Tool(
+        name="rediarize_clip",
+        description="Wiederholt die Diarization eines Clips mit einem Hint zur Sprecheranzahl. Nützlich, wenn pyannote über-segmentiert (z. B. 3 Sprecher in einer Ein-Personen-Rede erkannt → num_speakers=1). Ersetzt bestehende speakers und scene_speakers.",
+        args_schema={
+            "clip_id": "str — UUID oder Name des Clips",
+            "num_speakers": "int — EXAKTE erwartete Sprecheranzahl (Priorität)",
+            "min_speakers": "int — Untergrenze, falls num_speakers unbekannt",
+            "max_speakers": "int — Obergrenze, falls num_speakers unbekannt",
+            "min_speaker_time_s": "float — entfernt Sprecher mit < X Sek. Redezeit gesamt (Default 3.0, Anti-Falschpositive)",
+        },
+        handler=_tool_rediarize_clip,
+    ),
+    "cluster_speakers_across_clips": Tool(
+        name="cluster_speakers_across_clips",
+        description="Erkennt dieselbe Person clip-übergreifend via pyannote-Voice-Embeddings. Für Interviews mit mehreren Aufnahmen der gleichen Personen. Optional Auto-Rename aller Speaker eines Clusters mit einem gemeinsamen Label.",
+        args_schema={
+            "similarity_threshold": "float — Cosine-Threshold zum Mergen (Default 0.75, höher = strenger)",
+            "apply_labels": "bool — Auto-Rename der geclusterten Speaker mit gemeinsamem label_manual (Default false → nur Preview)",
+        },
+        handler=_tool_cluster_speakers_across_clips,
+    ),
+    "sync_multicam": Tool(
+        name="sync_multicam",
+        description="Berechnet zeitliche Offsets zwischen mehreren Multicam-Clips über Audio-Kreuzkorrelation (FFT). Für Interview-/Doku-Setups mit mehreren Kameras. Erster Clip = Master (offset=0), andere Clips relativ dazu. Gibt confidence pro Paar zurück.",
+        args_schema={
+            "clip_ids": "list[str] — mind. 2 Clip-UUIDs oder -Namen (erster wird Master)",
+        },
+        handler=_tool_sync_multicam,
+    ),
+    "export_last_cleanup": Tool(
+        name="export_last_cleanup",
+        description="Exportiert das Ergebnis des letzten remove_silences (im RAM gestashte Segmente) nach FCPXML. Direkt nach remove_silences zu verwenden.",
+        args_schema={
+            "stash_id": "str — Stash-ID (Default 'last')",
+            "format": "str — 'fcpxml' oder 'otio' (Default fcpxml)",
+            "name": "str — Name der Ausgabedatei",
+        },
+        handler=_tool_export_last_cleanup,
+    ),
+}
+
+
+# ─── System prompt ───────────────────────────────────────────
+def _build_system_prompt() -> str:
+    tools_desc = []
+    for t in TOOLS.values():
+        args_str = ", ".join(f"{k}: {v}" for k, v in t.args_schema.items()) or "aucun"
+        tools_desc.append(f"- {t.name}({args_str})\n    {t.description}")
+    tools_block = "\n".join(tools_desc)
+
+    return f"""Du bist CinAssist, ein KI-Agent für Video-Postproduktion. Du hilfst Profi-Cuttern, Routinearbeiten zu automatisieren (Sichtung/Dérushage, Plansuche, Cleanup, Rohschnitt).
+
+Du antwortest AUSSCHLIESSLICH in gültigem JSON, niemals Freitext außerhalb des JSON.
+
+Pflichtformat jeder Antwort:
+{{
+  "thought": "deine Überlegung in einem kurzen deutschen Satz",
+  "action": "tool_name" oder "done",
+  "args": {{ … Argumente des Tools (Schema einhalten) … }},
+  "final_answer": "finale Antwort an den Nutzer auf Deutsch (NUR wenn action=done)"
+}}
+
+Verfügbare Tools:
+{tools_block}
+
+Regeln:
+1. Zerlege komplexe Anfragen in mehrere aufeinanderfolgende Tool-Calls.
+2. Nach jedem Tool-Call bekommst du eine "Observation" (das JSON-Ergebnis). Nutze sie, um den nächsten Tool-Call zu entscheiden.
+3. Sobald du genug Informationen hast, setze "action": "done" und fülle "final_answer" mit einer klaren deutschen Antwort.
+4. Sei prägnant: vermeide redundante Tool-Calls, komm auf den Punkt.
+5. Wenn nichts gefunden wird, sag es ehrlich in final_answer, statt zu erfinden.
+6. IDs vs. Namen: Die meisten Tools akzeptieren jetzt sowohl UUIDs als auch Dateinamen (z. B. "mlk_1min.mp4" oder nur "mlk_1min"). Falls ein Tool mit "invalid UUID" crasht, unterstützt es die Auflösung noch nicht — rufe dann list_clips auf, um die UUID zu erhalten.
+7. Multi-Value-Filter: filter_by_framing akzeptiert mehrere Framings auf einmal als Liste, z. B. framing=["closeup","medium"]. Nicht mehrere separate Calls."""
+
+
+# ─── Ollama call ─────────────────────────────────────────────
+async def _call_ollama(prompt: str) -> tuple[dict, dict]:
+    """Retourne (parsed_json, meta) où meta contient latence + tokens/s."""
+    t0 = time.time()
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={
+                "model": AGENT_MODEL,
+                "prompt": prompt,
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": TEMPERATURE},
+            },
+        )
+        r.raise_for_status()
+        data = r.json()
+    wall = time.time() - t0
+    resp_text = data.get("response", "")
+    eval_c = data.get("eval_count", 0)
+    eval_d = data.get("eval_duration", 1) / 1e9
+    meta = {
+        "wall_s": round(wall, 2),
+        "tokens": eval_c,
+        "tokens_per_s": round(eval_c / eval_d, 1) if eval_d > 0 else 0,
+    }
+    try:
+        parsed = json.loads(resp_text)
+    except Exception as e:
+        parsed = {
+            "thought": f"[Parse error: {e}]",
+            "action": "done",
+            "final_answer": f"JSON-Parsing-Fehler des Modells: {resp_text[:200]}",
+        }
+    return parsed, meta
+
+
+# ─── ReAct loop ──────────────────────────────────────────────
+async def _run_agent(user_prompt: str, db: AsyncSession):
+    """Générateur async : yield chaque étape (thought/action/observation/done) au fur et à mesure."""
+    system = _build_system_prompt()
+    trace_lines = [f"UTILISATEUR: {user_prompt}"]
+
+    unknown_tool_streak = 0
+
+    def _to_text(x) -> str:
+        if isinstance(x, str):
+            return x.strip()
+        if x is None:
+            return ""
+        if isinstance(x, (dict, list)):
+            return json.dumps(x, ensure_ascii=False)
+        return str(x).strip()
+
+    async def _synthesize(reason: str) -> str:
+        """Zwingt das LLM, eine finale Antwort basierend auf den Observations zu schreiben."""
+        synth_prompt = (
+            system
+            + "\n\n"
+            + "\n\n".join(trace_lines)
+            + f"\n\nAnweisung ({reason}): Du hast alle nötigen Observations erhalten. "
+            "Formuliere JETZT die finale Antwort für den Nutzer auf Deutsch, als JSON, "
+            "mit action='done' und nicht-leerem final_answer. Fasse die gesammelten "
+            "Infos klar zusammen (Zahlen, Listen, Kernpunkte). Starte KEIN weiteres Tool."
+        )
+        try:
+            sp, _ = await _call_ollama(synth_prompt)
+            return _to_text(sp.get("final_answer")) or _to_text(sp.get("thought"))
+        except Exception as e:
+            logger.warning("synthesis fallback failed: %s", e)
+            return ""
+
+    for step in range(MAX_ITERATIONS):
+        prompt = system + "\n\n" + "\n\n".join(trace_lines) + "\n\nAntworte jetzt im JSON-Format."
+        parsed, meta = await _call_ollama(prompt)
+        thought = parsed.get("thought", "")
+        action = parsed.get("action", "done")
+        args = parsed.get("args", {}) or {}
+
+        # Traite action=null/none/vide comme un signal "je n'ai plus rien à faire"
+        if not action or (isinstance(action, str) and action.strip().lower() in ("none", "null", "n/a", "")):
+            action = "done"
+
+        yield {"type": "thought", "step": step, "content": thought, "meta": meta}
+
+        # Erkennt das Muster "Schleife auf unbekanntem Tool": nach 2 nicht existierenden
+        # Tools in Folge wird die Synthese erzwungen und die Schleife verlassen.
+        if isinstance(action, str) and action != "done" and action not in TOOLS:
+            unknown_tool_streak += 1
+            if unknown_tool_streak >= 2:
+                yield {"type": "action", "step": step, "name": action, "args": args}
+                obs = {"error": f"Unknown tool '{action}' — forcing synthesis after {unknown_tool_streak} unknown-tool attempts"}
+                yield {"type": "observation", "step": step, "content": obs}
+                final = await _synthesize("Agent-Schleife auf unbekannten Tools") or "Ich konnte keine klare Antwort formulieren."
+                yield {"type": "done", "step": step, "content": final}
+                return
+        else:
+            unknown_tool_streak = 0
+
+        if action == "done":
+            final = _to_text(parsed.get("final_answer")) or _to_text(thought)
+            if not final:
+                final = await _synthesize("done sans final_answer")
+            if not final:
+                final = "Fertig, aber ich konnte keine klare Antwort formulieren."
+            yield {"type": "done", "step": step, "content": final}
+            return
+
+        yield {"type": "action", "step": step, "name": action, "args": args}
+
+        tool = TOOLS.get(action)
+        if tool is None:
+            observation = {"error": f"Unknown tool '{action}'. Available: {list(TOOLS.keys())}"}
+        else:
+            try:
+                observation = await tool.handler(args, db)
+            except Exception as e:
+                logger.exception("Tool %s failed", action)
+                observation = {"error": f"Tool crashed: {e}"}
+
+        yield {"type": "observation", "step": step, "content": observation}
+        trace_lines.append(
+            f"Assistant: {json.dumps(parsed, ensure_ascii=False)}\n"
+            f"Observation: {json.dumps(observation, ensure_ascii=False)[:2000]}"
+        )
+
+    # MAX_ITER atteint sans que l'agent ait dit "done" : synthèse forcée
+    # basée sur les observations accumulées (mieux qu'un message d'erreur nu).
+    final = await _synthesize(f"max iter {MAX_ITERATIONS} atteint") if len(trace_lines) > 1 else ""
+    if not final:
+        final = f"Maximale Anzahl Iterationen erreicht ({MAX_ITERATIONS})."
+    yield {
+        "type": "done",
+        "step": MAX_ITERATIONS,
+        "content": final,
+    }
+
+
+# ─── HTTP endpoint (SSE streaming) ───────────────────────────
+class AgentRunRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="Anfrage des Nutzers in natürlicher Sprache")
+
+
+@router.post("/run")
+async def run_agent_stream(req: AgentRunRequest, db: AsyncSession = Depends(get_db)):
+    """
+    Server-Sent Events stream. Chaque événement = une étape ReAct
+    (thought / action / observation / done).
+    """
+    async def event_gen():
+        async for evt in _run_agent(req.prompt, db):
+            yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+@router.post("/run_sync")
+async def run_agent_sync(req: AgentRunRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """Version non-streaming pour tests CLI : renvoie la trace complète en une fois."""
+    trace = []
+    async for evt in _run_agent(req.prompt, db):
+        trace.append(evt)
+    final = next((e["content"] for e in reversed(trace) if e["type"] == "done"), None)
+    return {"final_answer": final, "trace": trace, "step_count": len(trace)}
+
+
+@router.get("/tools")
+async def list_tools() -> dict:
+    """Liste des tools disponibles à l'agent (pour debug / doc)."""
+    return {
+        "model": AGENT_MODEL,
+        "max_iterations": MAX_ITERATIONS,
+        "tools": [
+            {"name": t.name, "description": t.description, "args_schema": t.args_schema}
+            for t in TOOLS.values()
+        ],
+    }
