@@ -1,4 +1,12 @@
 """
+[DEPRECATED — 2026-07-20]
+Ce module ("guided cutting" via katalog + [VORSCHLAG:] tags) est remplacé par
+`backend/api/agent.py` (ReAct + 17 tools, streaming SSE via /api/agent/run).
+Le router est désactivé dans `main.py` (import + include_router commentés).
+Fichier conservé comme trace de l'évolution du design pour Bachelorarbeit —
+NE PAS relier sans discussion avec Pascal (deux personas parallèles = confusion).
+
+---
 CinAssist — KI-Chat-Assistent für geführte Schnittgespräche
 
 Endpunkte:

@@ -9,12 +9,15 @@ import {
   tlClipsToEngineTracks,
 } from "@/lib/timeline-model";
 import ClipWaveform from "@/components/ClipWaveform";
+import { sendToApp, type NleApp, type ExportSegment } from "@/lib/api";
 import { planPlacement, hasCollision, findFreeTrack } from "@/lib/timeline-placement";
 import type { TimelineCmd, TimelineCommandExecutor } from "@/lib/timeline-commands";
 import { useProposalStore } from "@/lib/proposals";
-import { ProposalSplitsLayer, ProposalDeletesInRow } from "@/components/ProposalGhostLayers";
+import { ProposalSplitsLayer, ProposalDeletesInRow, ProposalSummaryBadges, getFirstPendingProposalTime } from "@/components/ProposalGhostLayers";
 import ChatPanel from "@/components/ChatPanel";
 import { useChatStore } from "@/lib/chat-store";
+import ClipAnalysisModal from "@/components/ClipAnalysisModal";
+import { useIsMobile } from "@/lib/use-media-query";
 
 // Sequence frame rate. The engine keeps time in integer frames; the existing
 // seconds-based edit model is converted to/from frames only at this edge.
@@ -35,6 +38,8 @@ type ClipDTO = {
   dauer: number | null;
   aufloesung: string | null;
   bildrate: number | null;
+  codec: string | null;
+  dateigroesse_mb: number | null;
   status: string;
   video_url: string | null;
   proxy_url: string | null;
@@ -42,7 +47,32 @@ type ClipDTO = {
   strip_url: string | null;
 };
 type TimelineDTO = { id: string; name: string; erstellt_am: string | null };
-type ScheneMatch = { scene_id: string; clip_name: string; description: string; similarity: number };
+type ScheneMatch = {
+  scene_id: string;
+  clip_id: string;
+  clip_name: string;
+  szenen_nr: number;
+  start_zeit: number;
+  end_zeit: number;
+  dauer: number;
+  thumbnail_pfad: string | null;
+  beschreibung: string | null;
+  transkription: string | null;
+  similarity: number;           // score combiné
+  clip_score?: number;          // composante visuelle CLIP
+  text_score?: number;          // composante texte BM25 (0-1)
+  framing?: string | null;      // extreme_closeup|closeup|medium|wide_with_person|wide_no_person
+  face_count?: number | null;
+};
+
+type SearchFilters = {
+  dialog: boolean;              // scène avec transkription non-vide
+  closeup: boolean;             // framing ∈ {closeup, extreme_closeup}
+  ohnePersonen: boolean;        // face_count === 0
+  groupByClip: boolean;         // regroupement par clip
+};
+
+const DEFAULT_SEARCH_FILTERS: SearchFilters = { dialog: false, closeup: false, ohnePersonen: false, groupByClip: false };
 
 // Same-origin par défaut : Next.js rewrite /api/* → localhost:8001 côté serveur.
 // Cela évite les problèmes de CORS + rend le frontend accessible depuis n'importe
@@ -254,26 +284,189 @@ function CommitInput({ value, onCommit, style, title, disabled }: {
 export default function Editor() {
   const [clips, setClips] = useState<ClipDTO[]>([]);
   const [tlClips, setTlClips] = useState<TLClip[]>([]);
+  const isMobile = useIsMobile();
+  const [mobileWarningDismissed, setMobileWarningDismissed] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("cinassist-mobile-warning-dismissed") === "1") {
+        setMobileWarningDismissed(true);
+      }
+    } catch { /* ignore */ }
+  }, []);
+  const dismissMobileWarning = () => {
+    setMobileWarningDismissed(true);
+    try { localStorage.setItem("cinassist-mobile-warning-dismissed", "1"); } catch { /* ignore */ }
+  };
   const [loading, setLoading] = useState(true);
+  // File d'upload : chaque entrée = un fichier en cours (progress 0-100)
+  // ou fini (status). Reste affichée quelques secondes après completion.
+  const [uploadQueue, setUploadQueue] = useState<Array<{ id: string; name: string; size: number; progress: number; status: "uploading" | "analyzing" | "done" | "error"; error?: string; clipId?: string }>>([]);
+  const [dropTargetActive, setDropTargetActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   // KI-Agent Chat Panel — piloté par le bouton "KI-Agent" du footer.
   const chatPanelOpen = useChatStore((s) => s.isOpen);
   const toggleChatPanel = useChatStore((s) => s.toggle);
+  // Modal d'analyse d'un clip (ouvert par clic droit dans la Media Library).
+  const [analysisClipId, setAnalysisClipId] = useState<string | null>(null);
+  // Modal de confirmation de suppression (design custom, remplace window.confirm).
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    ids: string[];
+    names: string[];
+    usedInTLCount: number;
+  } | null>(null);
   // `playing` and `globalTime` are no longer React state: they are derived from
   // the playback engine below (isPlaying + currentFrame). The engine's
   // MasterClock is the single source of truth for time (golden rule).
   const [selectedTlIds, setSelectedTlIds] = useState<Set<string>>(new Set());
+  // Quand un clip est A/V getrennt (avLinked === false), on track quel côté
+  // (v/a/both) est visuellement sélectionné. Reset à "both" dès qu'un clip
+  // redevient linked ou qu'il n'est plus sélectionné.
+  const [selectedAvSide, setSelectedAvSide] = useState<Record<string, "v" | "a" | "both">>({});
   const selectedTlId = selectedTlIds.size === 1 ? Array.from(selectedTlIds)[0] : null;
   const [selectedMedia, setSelectedMedia] = useState<Set<string>>(new Set());
+  const [mediaMarquee, setMediaMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const mediaGridRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState("cut");
   const [fitOpen, setFitOpen] = useState(false);
   const [fitMode, setFitMode] = useState(FIT_MODES[0]);
   const [histOpen, setHistOpen] = useState(false);
   const [timelines, setTimelines] = useState<TimelineDTO[]>([]);
-  const [projectName, setProjectName] = useState("Meine Reise 2026");
+  const [projectName, setProjectName] = useState("CinAssist");
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<ScheneMatch[]>([]);
-  const [showSearch, setShowSearch] = useState(false);
+  const [showSearch, setShowSearch] = useState(true); // barre KI-Suche toujours visible par défaut
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchMeta, setSearchMeta] = useState<{ count: number; scanned: number; ms: number; error?: string; rewritten?: string | null } | null>(null);
+  const [searchFilters, setSearchFilters] = useState<SearchFilters>(DEFAULT_SEARCH_FILTERS);
+  // Regroupement par clip : { clip_id, clip_name, scenes[] } — recalculé au filtrage.
+  const [expandedClipGroups, setExpandedClipGroups] = useState<Set<string>>(new Set());
+
+  // Applique les filtres inline aux résultats. Zéro backend re-fetch.
+  const filteredSearchResults = useMemo(() => {
+    const isCloseup = (f: string | null | undefined) => f === "closeup" || f === "extreme_closeup";
+    return searchResults.filter((r) => {
+      if (searchFilters.dialog && !(r.transkription && r.transkription.trim().length > 0)) return false;
+      if (searchFilters.closeup && !isCloseup(r.framing)) return false;
+      if (searchFilters.ohnePersonen && (r.face_count ?? 0) > 0) return false;
+      return true;
+    });
+  }, [searchResults, searchFilters]);
+
+  // Regroupement par clip (préserve l'ordre des résultats du 1er hit par clip).
+  const groupedSearchResults = useMemo(() => {
+    const groups: Array<{ clip_id: string; clip_name: string; scenes: ScheneMatch[]; bestSim: number }> = [];
+    const idx: Record<string, number> = {};
+    for (const r of filteredSearchResults) {
+      if (idx[r.clip_id] == null) {
+        idx[r.clip_id] = groups.length;
+        groups.push({ clip_id: r.clip_id, clip_name: r.clip_name, scenes: [], bestSim: r.similarity });
+      }
+      groups[idx[r.clip_id]].scenes.push(r);
+      groups[idx[r.clip_id]].bestSim = Math.max(groups[idx[r.clip_id]].bestSim, r.similarity);
+    }
+    return groups;
+  }, [filteredSearchResults]);
+
+  const toggleGroup = (cid: string) => setExpandedClipGroups((s) => {
+    const n = new Set(s);
+    if (n.has(cid)) n.delete(cid); else n.add(cid);
+    return n;
+  });
+  // Hover preview : id de la scène actuellement survolée (après debounce 400ms)
+  // → la card affiche un <video> qui boucle sur la plage de la scène.
+  const [hoveredSceneId, setHoveredSceneId] = useState<string | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+  // Panier de comparaison : scene_ids sélectionnés depuis KI-Suche. Max 4.
+  const [compareBasket, setCompareBasket] = useState<string[]>([]);
+  const toggleCompare = (sceneId: string) => setCompareBasket((cur) => {
+    if (cur.includes(sceneId)) return cur.filter((id) => id !== sceneId);
+    if (cur.length >= 4) { toast("Maximal 4 Takes für den Vergleich.", "warn", 1800); return cur; }
+    return [...cur, sceneId];
+  });
+  // État du modal de comparaison (chargement, verdict, scènes détaillées).
+  const [compareState, setCompareState] = useState<{
+    open: boolean;
+    loading: boolean;
+    scenes: Array<{ scene_id: string; clip_id: string; clip_name: string; clip_proxy_url: string | null; szenen_nr: number; start_zeit: number; end_zeit: number; dauer: number; framing: string | null; face_count: number | null; transkription: string | null; beschreibung: string | null; speakers: string[]; thumbnail_pfad: string | null }>;
+    verdict: { best_scene_id: string; reasoning: string; per_scene: Record<string, { rank: number; note: string }> } | null;
+    meta: { model?: string; wall_s?: number; tokens?: number } | null;
+    error?: string;
+  }>({ open: false, loading: false, scenes: [], verdict: null, meta: null });
+  const runCompare = async () => {
+    if (compareBasket.length < 2) return;
+    setCompareState({ open: true, loading: true, scenes: [], verdict: null, meta: null });
+    try {
+      const r = await fetch("/api/agent/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scene_ids: compareBasket }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setCompareState({ open: true, loading: false, scenes: data.scenes ?? [], verdict: data.verdict ?? null, meta: data.meta ?? null });
+    } catch (e) {
+      setCompareState({ open: true, loading: false, scenes: [], verdict: null, meta: null, error: (e as Error).message });
+    }
+  };
+  // Recent queries (localStorage) — pour proposer des raccourcis dans la barre.
+  const [recentQueries, setRecentQueries] = useState<string[]>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("cinassist-recent-queries");
+      if (raw) setRecentQueries((JSON.parse(raw) as string[]).filter((q) => typeof q === "string"));
+    } catch { /* ignore */ }
+  }, []);
+  const rememberQuery = (q: string) => {
+    const cleaned = q.trim();
+    if (!cleaned) return;
+    setRecentQueries((cur) => {
+      const next = [cleaned, ...cur.filter((x) => x.toLowerCase() !== cleaned.toLowerCase())].slice(0, 8);
+      try { localStorage.setItem("cinassist-recent-queries", JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+  // Semantic bookmarks — "smart bins" utilisateur. Contrairement aux recent
+  // queries (auto-remplies), ces bookmarks sont volontairement sauvegardés.
+  const [bookmarkedQueries, setBookmarkedQueries] = useState<Array<{ label: string; query: string }>>([]);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("cinassist-semantic-bookmarks");
+      if (raw) setBookmarkedQueries(JSON.parse(raw) as Array<{ label: string; query: string }>);
+    } catch { /* ignore */ }
+  }, []);
+  const saveBookmarks = (arr: Array<{ label: string; query: string }>) => {
+    setBookmarkedQueries(arr);
+    try { localStorage.setItem("cinassist-semantic-bookmarks", JSON.stringify(arr)); } catch { /* ignore */ }
+  };
+  const addBookmark = () => {
+    const q = search.trim();
+    if (!q) return;
+    if (bookmarkedQueries.some((b) => b.query.toLowerCase() === q.toLowerCase())) {
+      toast("Bereits gespeichert.", "info", 1500);
+      return;
+    }
+    const label = window.prompt(`Label für diesen Smart-Bin?\n\nAnfrage: ${q}`, q.length > 24 ? q.slice(0, 22) + "…" : q);
+    if (!label || !label.trim()) return;
+    saveBookmarks([...bookmarkedQueries, { label: label.trim(), query: q }].slice(0, 12));
+    toast(`Smart-Bin "${label}" gespeichert.`, "ok", 1600);
+  };
+  const removeBookmark = (query: string) => {
+    saveBookmarks(bookmarkedQueries.filter((b) => b.query !== query));
+  };
+  // Tags "Explore" curés — points d'entrée pour découvrir sa banque de rushes
+  // sans savoir quoi chercher. Bilingue DE+EN pour matcher les descriptions
+  // llama3 (souvent EN) et la mentalité de Pascal (DE).
+  const SUGGESTED_TAGS: Array<{ label: string; query: string }> = [
+    { label: "Personen", query: "person, human face" },
+    { label: "Dialog", query: "two people talking, conversation" },
+    { label: "Nahaufnahme", query: "close-up portrait face" },
+    { label: "Landschaft", query: "wide landscape outdoor scene" },
+    { label: "Bewegung", query: "fast movement action motion" },
+    { label: "Nacht", query: "night dark scene low light" },
+    { label: "Musik", query: "music instrument performance" },
+    { label: "Text", query: "text overlay title graphic" },
+  ];
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiHistory, setAiHistory] = useState<{ role: "user" | "agent"; content: string }[]>([]);
@@ -294,7 +487,7 @@ export default function Editor() {
   // Zoom timeline : 1 = fit to width (default). 2 = 2× zoom = 200%. Range 0.25 – 8.
   const [zoom, setZoom] = useState(1);
   const MIN_ZOOM = 0.25;
-  const MAX_ZOOM = 8;
+  const MAX_ZOOM = 40;
 
   // Sprint 4 : dropdowns + Werkzeuge + panels
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -344,8 +537,21 @@ export default function Editor() {
   // Media drag-and-drop preview : quand l'utilisateur glisse un clip depuis
   // Medien vers la timeline, on affiche un ghost à la position du drop
   // potentiel (largeur = durée du clip, positionné sur la row cible).
-  const mediaDragRef = useRef<{ id: string; duration: number; name: string; stripUrl: string | null } | null>(null);
-  const [dropPreview, setDropPreview] = useState<{ leftPct: number; widthPct: number; trackIdx: number; name: string; stripUrl: string | null; snapPct: number | null } | null>(null);
+  const mediaDragRef = useRef<{
+    id: string;
+    duration: number;
+    name: string;
+    stripUrl: string | null;
+    hasAudio: boolean;
+    multi?: Array<{ id: string; duration: number; name: string; stripUrl: string | null; hasAudio: boolean }>;
+    // Scène spécifique dans le clip source (drag depuis KI-Suche) — pose un
+    // segment avec mediaStart = scene.start_zeit au lieu du clip entier.
+    scene?: { clipId: string; mediaStart: number; duration: number; szenen_nr: number };
+  } | null>(null);
+  // Dernière position résolue (avec snap + collision-fallback) — utilisée par les
+  // drop-handlers pour poser exactement là où le preview le montrait.
+  const mediaDropResolvedRef = useRef<{ startTime: number; trackIdx: number } | null>(null);
+  const [dropPreview, setDropPreview] = useState<{ trackIdx: number; snapPx: number | null; extraPadPx: number; items: Array<{ leftPx: number; widthPx: number; name: string; stripUrl: string | null; hasAudio: boolean }> } | null>(null);
   // Wave 2 : conteneur qui reçoit le wheel (Cmd+scroll → zoom). Listener attaché
   // manuellement en { passive: false } car React marque `wheel` comme passif au
   // niveau racine → preventDefault y est ignoré.
@@ -466,6 +672,145 @@ export default function Editor() {
       .catch(() => {});
   }, []);
 
+  // Rafraîchit la liste des clips sans toucher à la timeline courante.
+  // Utilisé après un upload ou pendant le polling d'ingest.
+  const refreshClips = async () => {
+    try {
+      const r = await fetch(`/api/clips`);
+      if (!r.ok) return;
+      const data = (await r.json()) as ClipDTO[];
+      const usable = data.filter((c) => c.status === "analysiert" || c.status === "hochgeladen");
+      setClips(usable);
+    } catch { /* ignore */ }
+  };
+
+  // Poll léger tant qu'il reste des clips en cours d'ingestion (status
+  // "hochgeladen" côté backend) — refresh toutes les 4s, s'arrête tout seul
+  // quand tous sont analysés.
+  useEffect(() => {
+    const pending = clips.some((c) => c.status === "hochgeladen");
+    if (!pending) return;
+    const iv = setInterval(refreshClips, 4000);
+    return () => clearInterval(iv);
+  }, [clips]);
+
+  // Agent proactif : dès qu'un clip passe à "analysiert", appeler l'endpoint
+  // /api/agent/proactive/{id} et pousser un message avec les suggestions dans
+  // le chat. Track localement les clips déjà vus pour ne pas re-notifier au
+  // reload de page.
+  const proactivelyCheckedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("cinassist-proactive-checked");
+      if (raw) proactivelyCheckedRef.current = new Set(JSON.parse(raw) as string[]);
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    const fresh = clips.filter((c) => c.status === "analysiert" && !proactivelyCheckedRef.current.has(c.id));
+    if (fresh.length === 0) return;
+    fresh.forEach((c) => {
+      proactivelyCheckedRef.current.add(c.id);
+      fetch(`/api/agent/proactive/${c.id}`, { method: "POST" })
+        .then((r) => r.ok ? r.json() : null)
+        .then((data) => {
+          if (!data || !Array.isArray(data.suggestions) || data.suggestions.length === 0) return;
+          const chat = useChatStore.getState();
+          chat.addMessage({
+            role: "assistant",
+            content: `Ich habe ${data.clip_name} analysiert — ${data.stats.n_scenes} Szenen · ${data.stats.n_speakers} Sprecher · ${data.stats.n_dialog_scenes} mit Dialog. Ein paar Vorschläge:`,
+            proactive: data.suggestions,
+          });
+          toast(`${data.suggestions.length} KI-Vorschläge zu ${data.clip_name} verfügbar.`, "info", 3500);
+        })
+        .catch(() => { /* silencieux — pas de notif si le backend est down */ });
+    });
+    try {
+      localStorage.setItem(
+        "cinassist-proactive-checked",
+        JSON.stringify(Array.from(proactivelyCheckedRef.current)),
+      );
+    } catch { /* ignore */ }
+  }, [clips]);
+
+  // Upload d'un fichier vidéo → POST /api/clips/upload (multipart).
+  // XHR pour la progression. Puis refresh + suit l'ingest via le poll clips.
+  const uploadFile = (file: File, queueId: string) => {
+    const fd = new FormData();
+    fd.append("datei", file);
+    fd.append("quelle", "A");
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/clips/upload`);
+    xhr.upload.onprogress = (ev) => {
+      if (!ev.lengthComputable) return;
+      const p = Math.round((ev.loaded / ev.total) * 100);
+      setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, progress: p } : it));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const res = JSON.parse(xhr.responseText) as { clip_id?: string };
+          setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, progress: 100, status: "analyzing", clipId: res.clip_id } : it));
+          refreshClips();
+          // Purge du queue-item après 6s (une fois "analyzing" affiché).
+          setTimeout(() => setUploadQueue((q) => q.filter((it) => it.id !== queueId)), 6000);
+        } catch {
+          setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "error", error: "Antwort ungültig" } : it));
+        }
+      } else {
+        let msg = `HTTP ${xhr.status}`;
+        try { const j = JSON.parse(xhr.responseText); if (j.detail) msg = String(j.detail); } catch { /* keep */ }
+        setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "error", error: msg } : it));
+      }
+    };
+    xhr.onerror = () => setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "error", error: "Netzwerkfehler" } : it));
+    xhr.send(fd);
+  };
+
+  // Ouvre le modal de confirmation. Calcule les infos affichées (noms, usage TL).
+  const deleteMedia = (mediaIds: string[]) => {
+    const ids = mediaIds.filter((id) => clips.some((c) => c.id === id));
+    if (ids.length === 0) return;
+    const names = ids.map((id) => clips.find((c) => c.id === id)?.dateiname || id);
+    const usedInTLCount = ids.filter((id) => tlClips.some((tc) => tc.clipId === id)).length;
+    setDeleteConfirm({ ids, names, usedInTLCount });
+  };
+
+  // Exécute la suppression une fois le modal confirmé.
+  const performDelete = async () => {
+    if (!deleteConfirm) return;
+    const { ids } = deleteConfirm;
+    setDeleteConfirm(null);
+    const usedInTL = ids.filter((id) => tlClips.some((tc) => tc.clipId === id));
+    if (usedInTL.length > 0) {
+      snapshot();
+      setTlClips((cur) => cur.filter((tc) => !usedInTL.includes(tc.clipId)));
+    }
+    setClips((cur) => cur.filter((c) => !ids.includes(c.id)));
+    setSelectedMedia((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n; });
+
+    const results = await Promise.allSettled(ids.map((id) => fetch(`/api/clips/${id}`, { method: "DELETE" })));
+    const failed = results.filter((r) => r.status === "rejected" || (r.status === "fulfilled" && !r.value.ok)).length;
+    if (failed > 0) {
+      toast(`${failed} Löschung(en) fehlgeschlagen — Liste wird neu geladen.`, "warn", 3500);
+      refreshClips();
+    } else {
+      toast(`${ids.length} Clip(s) gelöscht.`, "ok", 1600);
+    }
+  };
+
+  const handleFiles = (files: FileList | File[]) => {
+    const list = Array.from(files);
+    const ALLOWED = [".mp4", ".mov", ".avi", ".mkv", ".webm"];
+    const valid = list.filter((f) => ALLOWED.some((ext) => f.name.toLowerCase().endsWith(ext)));
+    const rejected = list.length - valid.length;
+    if (rejected > 0) toast(`${rejected} Datei(en) übersprungen — nur ${ALLOWED.join(", ")} unterstützt.`, "warn", 3000);
+    if (valid.length === 0) return;
+    const entries = valid.map((f) => ({ id: `up-${Date.now()}-${Math.round(f.size)}-${f.name}`, name: f.name, size: f.size, progress: 0, status: "uploading" as const }));
+    setUploadQueue((q) => [...q, ...entries]);
+    valid.forEach((f, i) => uploadFile(f, entries[i].id));
+    toast(`${valid.length} Datei(en) werden hochgeladen…`, "info", 2000);
+  };
+
   // Wave 1 + 3 : lire l'état persisté au montage (localStorage — client only,
   // donc dans un effet pour éviter tout mismatch d'hydratation SSR).
   useEffect(() => {
@@ -517,11 +862,15 @@ export default function Editor() {
   useEffect(() => { try { const hm: Record<string, number> = {}; for (const [id, s] of trackStates) if (typeof s.height === "number") hm[id] = s.height; localStorage.setItem("cinassist-track-heights-v2", JSON.stringify(hm)); } catch {} }, [trackStates]);
   useEffect(() => { try { localStorage.setItem("cinassist-tracks", JSON.stringify({ numVideoTracks, numAudioTracks, states: [...trackStates] })); } catch {} }, [numVideoTracks, numAudioTracks, trackStates]);
 
-  // Multi-track : la longueur de la séquence est la fin la plus tardive de
-  // TOUTES les pistes (max start+duration), pas la somme des durées — sinon les
-  // clips répartis sur plusieurs pistes fausseraient le mapping horizontal.
-  // Pour une piste unique tuilée bout-à-bout, max(end) == somme des durées.
-  const totalDuration = useMemo(() => tlClips.reduce((m, c) => Math.max(m, c.start + c.duration), 0), [tlClips]);
+  // Durée minimale de la timeline (10 min) — la timeline reste utilisable et
+  // ruler visible même quand vide, comme dans DaVinci. Elle s'étend
+  // automatiquement au-delà si les clips dépassent 10 min.
+  const MIN_TIMELINE_DURATION = 600;
+  // Multi-track : la fin réelle des clips (max start+duration). Utile pour les
+  // stats et le zoomFit.
+  const actualClipsEnd = useMemo(() => tlClips.reduce((m, c) => Math.max(m, c.start + c.duration), 0), [tlClips]);
+  // Durée effective utilisée pour ruler + positionnement % + inner width.
+  const totalDuration = useMemo(() => Math.max(MIN_TIMELINE_DURATION, actualClipsEnd), [actualClipsEnd]);
 
   // ── Playback engine (Phase 2) ─────────────────────────────────────
   // The frame-based timeline (source of truth) is derived from the seconds-based
@@ -911,6 +1260,7 @@ export default function Editor() {
     setInAtPlayhead: () => void; setOutAtPlayhead: () => void;
     clearInPoint: () => void; clearOutPoint: () => void;
     splitAtInOut: () => void; zoomToRange: () => void;
+    selectedMediaSize: number; selectedTlSize: number; deleteSelectedMedia: () => void;
   }>({
     undo: () => {}, redo: () => {}, removeSelected: () => {},
     removeSelectedRipple: () => {},
@@ -922,6 +1272,7 @@ export default function Editor() {
     setInAtPlayhead: () => {}, setOutAtPlayhead: () => {},
     clearInPoint: () => {}, clearOutPoint: () => {},
     splitAtInOut: () => {}, zoomToRange: () => {},
+    selectedMediaSize: 0, selectedTlSize: 0, deleteSelectedMedia: () => {},
   });
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -941,6 +1292,11 @@ export default function Editor() {
       else if ((e.metaKey || e.ctrlKey) && (e.code === "Minus" || e.code === "NumpadSubtract")) { e.preventDefault(); A.zoomOut(); }
       else if ((e.metaKey || e.ctrlKey) && e.code === "Digit0") { e.preventDefault(); A.zoomFit(); }
       else if ((e.code === "Delete" || e.code === "Backspace") && e.shiftKey) { e.preventDefault(); A.removeSelectedRipple(); }
+      else if ((e.code === "Delete" || e.code === "Backspace") && A.selectedMediaSize > 0 && A.selectedTlSize === 0) {
+        // Focus implicite sur le panel Medien (aucun clip timeline sélectionné) → supprime les médias.
+        e.preventDefault();
+        A.deleteSelectedMedia();
+      }
       else if (e.code === "Delete" || e.code === "Backspace") { e.preventDefault(); A.removeSelected(); }
       else if (e.code === "KeyC" && e.shiftKey) { e.preventDefault(); A.splitAtInOut(); }
       else if ((e.code === "KeyC" || e.code === "KeyS") && !e.shiftKey) { e.preventDefault(); A.splitAtGlobalTime(); }
@@ -1454,6 +1810,17 @@ export default function Editor() {
     if (d.kind === "a") {
       // Audio row grab → track vertical la row AUDIO (indépendant du vidéo)
       d.hoverAudioTrack = nearestAudioTrack(probeY);
+      if (numAudioTracks < MAX_TRACKS) {
+        // A1 en HAUT, A(n) en BAS. Drag SOUS la row la plus basse = créer A(n+1).
+        const bottommostRow = audioRowRefs.current.get(numAudioTracks - 1);
+        if (bottommostRow) {
+          const bottomEdge = bottommostRow.getBoundingClientRect().bottom;
+          const clipH = d.el.offsetHeight;
+          if (probeY > bottomEdge + clipH * 0.5) {
+            d.hoverAudioTrack = numAudioTracks;
+          }
+        }
+      }
     }
     if (d.kind === "v" && numVideoTracks < MAX_TRACKS) {
       // Ordre visuel DaVinci : V(n) en HAUT, V1 en bas. La piste la plus haute
@@ -1654,9 +2021,16 @@ export default function Editor() {
     setTimeout(() => { justDraggedClipRef.current = false; }, 0);
     if (d.kind === "a" && !d.linked) {
       // Unlinked audio drag → bouge audioStart ET la piste audio (Y).
+      // Si drag sous la dernière row audio → crée une nouvelle piste A(n+1).
+      const needsNewTrack = d.hoverAudioTrack >= numAudioTracks && numAudioTracks < MAX_TRACKS;
+      const targetATrack = needsNewTrack ? numAudioTracks : d.hoverAudioTrack;
       snapshot();
+      if (needsNewTrack) {
+        setNumAudioTracks((n) => Math.min(MAX_TRACKS, n + 1));
+        toast(`Neue Audiospur A${targetATrack + 1} eingefügt.`, "ok", 1400);
+      }
       setTlClips((cur) => cur.map((c) => c.tlId === d.tlId
-        ? { ...c, audioStart: d.lastT, audioTrackIndex: d.hoverAudioTrack }
+        ? { ...c, audioStart: d.lastT, audioTrackIndex: targetATrack }
         : c));
       return;
     }
@@ -1922,17 +2296,25 @@ export default function Editor() {
     toast(`${n} Clip${n > 1 ? "s" : ""} rippled entfernt.`, "ok", 1800);
   };
 
-  const clickTlClip = (tlId: string, e: React.MouseEvent, seekStart: number) => {
+  const clickTlClip = (tlId: string, e: React.MouseEvent, seekStart: number, side: "v" | "a" = "v") => {
     e.stopPropagation();
     // A drag just ended: the browser fires a trailing click — ignore it so the
     // drag does not also toggle selection / seek.
     if (justDraggedClipRef.current) return;
     const additive = e.metaKey || e.ctrlKey || e.shiftKey;
+    const clip = tlClips.find((c) => c.tlId === tlId);
+    const linked = clip?.avLinked !== false;
+    const effectiveSide: "v" | "a" | "both" = linked ? "both" : side;
     setSelectedTlIds((cur) => {
       const n = new Set(additive ? cur : []);
       if (additive && n.has(tlId)) n.delete(tlId);
       else n.add(tlId);
       return n;
+    });
+    setSelectedAvSide((cur) => {
+      const next = additive ? { ...cur } : {};
+      next[tlId] = effectiveSide;
+      return next;
     });
     if (!additive) seekSeconds(seekStart);
   };
@@ -2413,6 +2795,222 @@ export default function Editor() {
       return n;
     });
 
+  // Drop d'une SCÈNE spécifique depuis KI-Suche : pose un segment avec
+  // mediaStart = scene.start_zeit et duration = scene.dauer sur le clip source.
+  // Contrairement à smartDrop("media"), on n'inclut pas le clip entier.
+  const dropSceneAt = (opts: { clipId: string; mediaStart: number; duration: number; szenen_nr: number; intendedVideoTrack: number; dropTime: number }) => {
+    const src = clips.find((c) => c.id === opts.clipId);
+    if (!src) { toast("Quellclip nicht in Medien.", "warn"); return; }
+    const vIdx = Math.max(0, Math.min(MAX_TRACKS - 1, opts.intendedVideoTrack));
+    if (trackState(`v${vIdx}`).locked) { toast(`V${vIdx + 1} ist gesperrt.`, "warn", 1500); return; }
+    const dropTime = Math.max(0, opts.dropTime);
+    // Collision fallback → tail de la piste cible si la plage colide.
+    let cursor = dropTime;
+    const rowClips = tlClips.filter((c) => (c.videoTrackIndex ?? 0) === vIdx);
+    const collides = rowClips.some((c) => cursor + opts.duration > c.start && c.start + c.duration > cursor);
+    if (collides) cursor = rowClips.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
+    const sourceDur = src.dauer || opts.duration;
+    const seg: TLClip = {
+      tlId: `${opts.clipId}-scene${opts.szenen_nr}-${Date.now()}`,
+      clipId: opts.clipId,
+      name: `${src.dateiname.replace(/\.[^/.]+$/, "")} · Szene ${opts.szenen_nr}`,
+      start: cursor,
+      duration: opts.duration,
+      mediaStart: opts.mediaStart,
+      sourceDuration: sourceDur,
+      stripUrl: abs(src.strip_url),
+      waveformUrl: abs(src.waveform_url),
+      proxyUrl: abs(src.proxy_url || src.video_url),
+      videoUrl: abs(src.video_url),
+      hasAudio: !!src.waveform_url,
+      videoTrackIndex: vIdx,
+      audioTrackIndex: vIdx,
+    };
+    snapshot();
+    setTlClips((cur) => [...cur, seg]);
+    toast(`Szene ${opts.szenen_nr} eingefügt (${opts.duration.toFixed(1)}s).`, "ok", 1600);
+  };
+
+  // Multi-drop depuis Medien : pose plusieurs clips séquentiellement (back-to-back)
+  // à partir de `dropTime` sur `intendedVideoTrack`. Si un preview a résolu la
+  // position finale (snap + collision-fallback), on l'utilise en priorité. Sinon,
+  // fallback : dropTime tel quel, décalé au tail en cas de collision.
+  const dropMediaBatch = (mediaIds: string[], intendedVideoTrack: number, dropTime: number) => {
+    if (mediaIds.length === 0) return;
+    const srcs = mediaIds.map((id) => clips.find((c) => c.id === id)).filter(Boolean) as typeof clips;
+    if (srcs.length === 0) return;
+    const resolved = mediaDropResolvedRef.current;
+    const vIdx = resolved
+      ? Math.max(0, Math.min(MAX_TRACKS - 1, resolved.trackIdx))
+      : Math.max(0, Math.min(MAX_TRACKS - 1, intendedVideoTrack));
+    if (trackState(`v${vIdx}`).locked) { toast(`V${vIdx + 1} ist gesperrt.`, "warn", 1500); return; }
+
+    // Position de départ : preview snap si dispo, sinon dropTime + fallback collision.
+    let cursor = resolved ? Math.max(0, resolved.startTime) : Math.max(0, dropTime);
+    const totalDur = srcs.reduce((s, c) => s + (c.dauer || 0), 0);
+    if (!resolved) {
+      const rowClips = tlClips.filter((c) => (c.videoTrackIndex ?? 0) === vIdx);
+      const rangeCollides = rowClips.some((c) => cursor + totalDur > c.start && c.start + c.duration > cursor);
+      if (rangeCollides) {
+        cursor = rowClips.reduce((max, c) => Math.max(max, c.start + c.duration), 0);
+      }
+    }
+    mediaDropResolvedRef.current = null;
+
+    const now = Date.now();
+    const newClips: TLClip[] = srcs.map((src, i) => {
+      const dur = src.dauer || 0;
+      const seg: TLClip = {
+        tlId: `${src.id}-${now}-${i}`,
+        clipId: src.id,
+        name: src.dateiname.replace(/\.[^/.]+$/, ""),
+        start: cursor,
+        duration: dur,
+        mediaStart: 0,
+        sourceDuration: dur,
+        stripUrl: abs(src.strip_url),
+        waveformUrl: abs(src.waveform_url),
+        proxyUrl: abs(src.proxy_url || src.video_url),
+        videoUrl: abs(src.video_url),
+        hasAudio: !!src.waveform_url,
+        videoTrackIndex: vIdx,
+        audioTrackIndex: vIdx,
+      };
+      cursor += dur;
+      return seg;
+    });
+
+    snapshot();
+    setTlClips((cur) => [...cur, ...newClips]);
+    toast(`${newClips.length} Clips eingefügt.`, "ok", 1400);
+    // Auto-scroll pour révéler les clips nouvellement placés — sinon ils
+    // atterrissent souvent hors de l'écran (au tail après collision) et le user
+    // pense qu'ils n'ont pas été placés.
+    const newEnd = cursor; // fin du dernier clip inséré (temps absolu)
+    setTimeout(() => {
+      const container = timelineRef.current;
+      const inner = container?.firstElementChild as HTMLDivElement | null;
+      const total = totalDurationRef.current;
+      if (!container || !inner || total <= 0) return;
+      const pxPerSec = inner.offsetWidth / total;
+      const lastRightPx = newEnd * pxPerSec;
+      if (lastRightPx > container.scrollLeft + container.clientWidth - 40) {
+        container.scrollLeft = Math.max(0, lastRightPx - container.clientWidth + 60);
+      }
+    }, 60);
+  };
+
+  // Rendu d'une card résultat KI-Suche. Extraite pour réutilisation dans le mode
+  // filtré (à plat) ET dans le mode "gruppiert nach Clip" (sous-liste par groupe).
+  // Utilise les closures Editor : compareBasket, hoveredSceneId, tlClips, etc.
+  const renderSceneCard = (r: ScheneMatch) => {
+    const src = clips.find((c) => c.dateiname === r.clip_name);
+    let thumbUrl: string | null = null;
+    if (r.thumbnail_pfad) {
+      const idx = r.thumbnail_pfad.indexOf("/temp/");
+      if (idx >= 0) thumbUrl = r.thumbnail_pfad.slice(idx);
+    }
+    if (!thumbUrl && src) thumbUrl = abs(src.strip_url);
+    const simPct = Math.round(r.similarity * 100);
+    const simColor = simPct >= 45 ? "#6ad04a" : simPct >= 25 ? "#e0b84a" : "#8a8a8a";
+    const clipPct = Math.round((r.clip_score ?? 0) * 100);
+    const textPct = Math.round((r.text_score ?? 0) * 100);
+    const hasClip = clipPct >= 15;
+    const hasText = textPct >= 15;
+    const matchKind = hasClip && hasText ? "V+T" : hasText ? "T" : "V";
+    const matchTitle = `Visuell (CLIP): ${clipPct}%\nText (BM25): ${textPct}%\nGesamt: ${simPct}%`;
+    const fmtT = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+    return (
+      <button
+        key={r.scene_id}
+        draggable={!!src}
+        onDragStart={(e) => {
+          if (!src) { e.preventDefault(); return; }
+          const payload = { clip_id: r.clip_id, media_start: r.start_zeit, duration: r.dauer, name: `${r.clip_name.replace(/\.[^/.]+$/, "")} · Szene ${r.szenen_nr}`, szenen_nr: r.szenen_nr };
+          e.dataTransfer.setData("application/x-cinassist-scene", JSON.stringify(payload));
+          e.dataTransfer.setData("text/plain", r.clip_name);
+          e.dataTransfer.effectAllowed = "copy";
+          mediaDragRef.current = { id: r.clip_id, duration: r.dauer, name: payload.name, stripUrl: thumbUrl, hasAudio: !!src.waveform_url, scene: { clipId: r.clip_id, mediaStart: r.start_zeit, duration: r.dauer, szenen_nr: r.szenen_nr } };
+        }}
+        onDragEnd={() => { mediaDragRef.current = null; mediaDropResolvedRef.current = null; setDropPreview(null); }}
+        onClick={() => {
+          const tl = tlClips.find((c) => c.name === r.clip_name.replace(/\.[^/.]+$/, ""));
+          if (tl) {
+            seekSeconds(tl.start + Math.max(0, r.start_zeit - tl.mediaStart));
+            setSelectedTlIds(new Set([tl.tlId]));
+            toast(`Sprung zu Szene ${r.szenen_nr} in ${r.clip_name}.`, "ok", 1600);
+          } else if (src) {
+            appendClip(src.id);
+            toast(`${r.clip_name} zur Timeline hinzugefügt.`, "ok", 1600);
+          } else {
+            toast(`Clip nicht in Medien gefunden.`, "warn");
+          }
+        }}
+        title={src ? "Klick = seek/hinzufügen · Ziehen = nur die Szene auf die Timeline" : "Quellclip fehlt"}
+        style={{ display: "flex", gap: 8, padding: 6, borderRadius: 7, background: compareBasket.includes(r.scene_id) ? "#1e2530" : "#151517", border: compareBasket.includes(r.scene_id) ? "1px solid #4a7fc0" : "1px solid #232326", textAlign: "left", cursor: src ? "grab" : "not-allowed", opacity: src ? 1 : 0.55, position: "relative" }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "#1c1c1e";
+          e.currentTarget.style.borderColor = "#3a3a3e";
+          if (!src) return;
+          if (hoverTimerRef.current) window.clearTimeout(hoverTimerRef.current);
+          hoverTimerRef.current = window.setTimeout(() => setHoveredSceneId(r.scene_id), 400);
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "#151517";
+          e.currentTarget.style.borderColor = "#232326";
+          if (hoverTimerRef.current) { window.clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+          setHoveredSceneId((cur) => (cur === r.scene_id ? null : cur));
+        }}
+      >
+        <span
+          onClick={(e) => { e.stopPropagation(); toggleCompare(r.scene_id); }}
+          onMouseDown={(e) => e.stopPropagation()}
+          title={compareBasket.includes(r.scene_id) ? "Aus Vergleich entfernen" : "Zum Vergleich hinzufügen"}
+          style={{ position: "absolute", top: 4, right: 4, zIndex: 3, width: 16, height: 16, borderRadius: 4, background: compareBasket.includes(r.scene_id) ? "#4a7fc0" : "rgba(0,0,0,0.5)", border: `1px solid ${compareBasket.includes(r.scene_id) ? "#6a9fe0" : "rgba(255,255,255,0.2)"}`, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+        >
+          {compareBasket.includes(r.scene_id) && (
+            <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5" /></svg>
+          )}
+        </span>
+        {hoveredSceneId === r.scene_id && src ? (
+          <video
+            ref={(el) => {
+              if (!el) return;
+              const doSeek = () => { try { el.currentTime = r.start_zeit; } catch { /* trop tôt */ } };
+              if (el.readyState >= 1) doSeek(); else el.addEventListener("loadedmetadata", doSeek, { once: true });
+            }}
+            src={abs(src.proxy_url || src.video_url) || undefined}
+            muted autoPlay playsInline preload="auto"
+            onTimeUpdate={(e) => { const v = e.currentTarget; if (v.currentTime >= r.end_zeit - 0.05) { try { v.currentTime = r.start_zeit; } catch { /* ignore */ } } }}
+            style={{ width: 56, height: 42, borderRadius: 4, objectFit: "cover", background: "#0a0a0b", flex: "none" }}
+          />
+        ) : (
+          <div style={{ width: 56, height: 42, borderRadius: 4, background: thumbUrl ? `url(${thumbUrl}) center/cover no-repeat` : "linear-gradient(#3a3a3e,#1a1a1c)", flex: "none" }} />
+        )}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#d4d4d4" }}>
+            <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1, fontWeight: 600 }}>{r.clip_name}</span>
+            <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, color: "#8a8a8a", flex: "none" }}>Szene {r.szenen_nr} · {fmtT(r.start_zeit)}→{fmtT(r.end_zeit)}</span>
+            <span title={matchTitle} style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, color: simColor, fontWeight: 700, flex: "none", padding: "1px 5px", borderRadius: 3, background: `${simColor}22`, display: "flex", alignItems: "center", gap: 3 }}>
+              {simPct}%
+              <span style={{ fontSize: 9, opacity: 0.75, fontWeight: 600 }}>{matchKind}</span>
+            </span>
+          </div>
+          {r.beschreibung && (
+            <div style={{ fontSize: 10, color: "#9a9a9a", overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", lineHeight: 1.35 }}>
+              {r.beschreibung}
+            </div>
+          )}
+          {r.transkription && (
+            <div style={{ fontSize: 10, color: "#7fd4c4", fontStyle: "italic", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+              «{r.transkription}»
+            </div>
+          )}
+        </div>
+      </button>
+    );
+  };
+
   const loadTimeline = async (timelineId: string) => {
     try {
       const r = await fetch(`${API}/api/timelines/${timelineId}`);
@@ -2501,17 +3099,57 @@ export default function Editor() {
     }
   };
 
-  const runSearch = async () => {
-    if (!search.trim()) { setSearchResults([]); return; }
+  // Query par exemple : depuis le clic droit d'un tlClip → cherche des scènes
+  // visuellement similaires via l'embedding CLIP du clip source. Réutilise le
+  // panel KI-Suche pour afficher les résultats.
+  const findSimilarByClip = async (clipId: string) => {
+    const src = clips.find((c) => c.id === clipId);
+    const label = src?.dateiname ?? clipId.slice(0, 8);
+    setSearch(`[Ähnlich zu: ${label}]`);
+    setShowSearch(true);
+    setSearchBusy(true);
+    setSearchResults([]);
+    setSearchMeta(null);
+    setSearchFilters(DEFAULT_SEARCH_FILTERS);
     try {
-      const r = await fetch(`${API}/api/scenes/search`, {
+      const r = await fetch(`/api/scenes/similar-by-clip`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: search, limit: 8 }),
+        body: JSON.stringify({ clip_id: clipId, limit: 12, min_similarity: 0.20, exclude_source: true }),
       });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       setSearchResults(data.results || []);
-    } catch { setSearchResults([]); }
+      setSearchMeta({ count: data.count ?? 0, scanned: data.scanned ?? 0, ms: data.elapsed_ms ?? 0, rewritten: null });
+      if ((data.results || []).length === 0) toast("Keine visuell ähnlichen Szenen gefunden.", "info", 2000);
+      else toast(`${data.results.length} ähnliche Szene${data.results.length > 1 ? "n" : ""} zu ${label} gefunden.`, "ok", 2000);
+    } catch (e) {
+      setSearchMeta({ count: 0, scanned: 0, ms: 0, error: (e as Error).message });
+    } finally {
+      setSearchBusy(false);
+    }
+  };
+
+  const runSearch = async () => {
+    if (!search.trim()) { setSearchResults([]); setSearchMeta(null); return; }
+    setSearchBusy(true);
+    try {
+      const r = await fetch(`/api/scenes/search`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: search, limit: 12, min_similarity: 0.18 }),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      setSearchResults(data.results || []);
+      setSearchMeta({ count: data.count ?? 0, scanned: data.scanned ?? 0, ms: data.elapsed_ms ?? 0, rewritten: data.query_rewritten ?? null });
+      rememberQuery(search);
+    } catch (e) {
+      setSearchResults([]);
+      setSearchMeta({ count: 0, scanned: 0, ms: 0, error: (e as Error).message });
+    } finally {
+      setSearchBusy(false);
+    }
   };
 
   const sendAi = async (msg?: string) => {
@@ -2578,7 +3216,9 @@ export default function Editor() {
   const timelineInnerWidth = `${100 * zoom}%`;
   const zoomIn = () => setZoom((z) => Math.min(MAX_ZOOM, z * 1.5));
   const zoomOut = () => setZoom((z) => Math.max(MIN_ZOOM, z / 1.5));
-  const zoomFit = () => setZoom(1);
+  // Fit : zoome pour remplir l'outer avec les clips existants (pas le canevas
+  // vide de 10 min). Si la timeline est vide → zoom 1 (vue 10 min).
+  const zoomFit = () => setZoom(actualClipsEnd > 0 ? clamp(totalDuration / actualClipsEnd, MIN_ZOOM, MAX_ZOOM) : 1);
 
   const gridMedia = useMemo(() => {
     let list = clips;
@@ -2665,7 +3305,7 @@ export default function Editor() {
   };
 
   const addMarkerAtPlayhead = () => {
-    if (totalDuration === 0) { toast("Keine Timeline.", "warn"); return; }
+    if (actualClipsEnd === 0) { toast("Keine Timeline.", "warn"); return; }
     const label = prompt("Marker-Bezeichnung:", `Marker ${markers.length + 1}`);
     if (label == null) return;
     const m = { id: `m-${Date.now()}`, time: globalTime, label: label || `Marker ${markers.length + 1}` };
@@ -2675,7 +3315,7 @@ export default function Editor() {
 
   // Marker à une position temporelle donnée (menu contextuel « ici »).
   const addMarkerAt = (time: number) => {
-    if (totalDuration === 0) { toast("Keine Timeline.", "warn"); return; }
+    if (actualClipsEnd === 0) { toast("Keine Timeline.", "warn"); return; }
     const t = clamp(time, 0, totalDuration);
     const label = prompt("Marker-Bezeichnung:", `Marker ${markers.length + 1}`);
     if (label == null) return;
@@ -2899,6 +3539,34 @@ export default function Editor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   });
 
+  // Auto-scroll timeline vers le 1er edit d'une nouvelle proposal pending —
+  // le user vient de recevoir « 47 Stille zu entfernen » dans le chat, il faut
+  // qu'il voie où sur la timeline sans chercher.
+  const pendingProposalCount = useProposalStore((s) =>
+    s.proposals.filter((p) => p.status === "pending").length,
+  );
+  const lastKnownPendingCount = useRef(0);
+  useEffect(() => {
+    if (pendingProposalCount <= lastKnownPendingCount.current) {
+      lastKnownPendingCount.current = pendingProposalCount;
+      return;
+    }
+    lastKnownPendingCount.current = pendingProposalCount;
+    // Nouvelle proposal apparue → scroll+seek vers son 1er edit.
+    const first = getFirstPendingProposalTime();
+    if (!first || totalDuration <= 0) return;
+    const container = timelineRef.current;
+    const inner = container?.firstElementChild as HTMLDivElement | null;
+    if (!container || !inner) return;
+    const pxPerSec = inner.offsetWidth / totalDuration;
+    const targetPx = first.t * pxPerSec;
+    // Centre le 1er edit dans la viewport horizontale.
+    const viewCenter = container.clientWidth / 2;
+    container.scrollLeft = Math.max(0, targetPx - viewCenter);
+    // Aussi place le playhead pile au début pour le repère visuel.
+    seekSeconds(first.t);
+  }, [pendingProposalCount, totalDuration]); // seekSeconds/timelineRef stables
+
   /* ─── Menu contextuel (#3) ─── */
   const openMenuAt = (x: number, y: number, items: MenuItem[]) => {
     const W = 210;
@@ -2923,6 +3591,8 @@ export default function Editor() {
       { label: "Links trimmen (−0,5 s)", onClick: () => trimSelected("left") },
       { label: "Rechts trimmen (−0,5 s)", onClick: () => trimSelected("right") },
       { label: "Beide trimmen (−1 s)", onClick: () => trimSelected("both") },
+      { separator: true },
+      { label: "Ähnliche Szenen finden", onClick: () => findSimilarByClip(clip.clipId) },
       { separator: true },
       { label: locked ? "Entsperren" : "Sperren", onClick: toggleLockSelected },
       (clip.hasAudio
@@ -3040,11 +3710,15 @@ export default function Editor() {
   // Fix #8 : mise à jour continue du ref d'actions pour que le listener clavier reste attaché une fois
   // (sinon on ré-attache 60×/s pendant lecture et on rate des touches).
   kbActionsRef.current = {
+    ...kbActionsRef.current,
     undo, redo, removeSelected, removeSelectedRipple, splitAtGlobalTime, addMarkerAtPlayhead,
     toggleFullscreen, zoomIn, zoomOut, zoomFit,
     togglePlay,
     seekBy: (delta: number) => seekSeconds(globalTime + delta),
     seekTo: (t: number) => seekSeconds(t),
+    selectedMediaSize: selectedMedia.size,
+    selectedTlSize: selectedTlIds.size,
+    deleteSelectedMedia: () => deleteMedia(Array.from(selectedMedia)),
     fillGapAt,
     fillGapAtPlayhead: () => {
       let filled = 0;
@@ -3285,6 +3959,37 @@ export default function Editor() {
           <div style={inspRow}><span style={inspLabel}>Quelldauer</span><span style={inspRO}>{fmtMSF(clip.sourceDuration)}</span></div>
         </div>
 
+        {/* Metadaten (issu de ffprobe à l'ingest) */}
+        {(() => {
+          const src = clips.find((c) => c.id === clip.clipId);
+          if (!src) return null;
+          const has = src.aufloesung || src.bildrate || src.codec || src.dateigroesse_mb;
+          if (!has) return null;
+          return (
+            <div style={inspSection}>
+              <div style={inspSecHeader}>Metadaten</div>
+              {src.aufloesung && (
+                <div style={inspRow}><span style={inspLabel}>Auflösung</span><span style={inspRO}>{src.aufloesung}</span></div>
+              )}
+              {src.bildrate != null && (
+                <div style={inspRow}><span style={inspLabel}>Bildrate</span><span style={inspRO}>{src.bildrate} fps</span></div>
+              )}
+              {src.codec && (
+                <div style={inspRow}><span style={inspLabel}>Codec</span><span style={inspRO}>{src.codec.toUpperCase()}</span></div>
+              )}
+              {src.dateigroesse_mb != null && (
+                <div style={inspRow}><span style={inspLabel}>Größe</span><span style={inspRO}>{src.dateigroesse_mb < 1024 ? `${src.dateigroesse_mb.toFixed(1)} MB` : `${(src.dateigroesse_mb / 1024).toFixed(2)} GB`}</span></div>
+              )}
+              {src.status && (
+                <div style={inspRow}>
+                  <span style={inspLabel}>Status</span>
+                  <span style={{ ...inspRO, color: src.status === "analysiert" ? "#8ed08e" : src.status === "fehler" ? "#e88" : "#e0b84a" }}>{src.status}</span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* Audio */}
         {clip.hasAudio && (
           <div style={inspSection}>
@@ -3347,7 +4052,34 @@ export default function Editor() {
   };
 
   return (
-    <div style={{ width: "100%", height: "100%", background: "#0c0c0d", overflow: "hidden", display: "flex", flexDirection: "column", color: "#e9e9e9" }}>
+    <div style={{ width: "100%", height: "100%", background: "#0c0c0d", overflow: isMobile ? "auto" : "hidden", display: "flex", flexDirection: "column", color: "#e9e9e9", position: "relative" }}>
+      {/* Overlay mobile — CinAssist reste un outil desktop. Sur petit écran on
+          prévient l'utilisateur et on lui offre un mode « quand même », mais
+          l'expérience touch reste dégradée par design (montage vidéo pro). */}
+      {isMobile && !mobileWarningDismissed && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(12,12,13,0.96)", zIndex: 9000, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, textAlign: "center" }}>
+          <svg width={54} height={54} viewBox="0 0 24 24" fill="none" stroke="#b9d94a" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ marginBottom: 20 }}>
+            <rect x="2" y="4" width="20" height="14" rx="2" />
+            <path d="M8 22h8M12 18v4" />
+          </svg>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#f0f0f0", marginBottom: 10 }}>Optimiert für Desktop</div>
+          <div style={{ fontSize: 14, color: "#a0a0a0", lineHeight: 1.55, maxWidth: 400, marginBottom: 28 }}>
+            CinAssist ist ein professionelles Videoschnitt-Tool. Für die volle Erfahrung (Timeline, Multitrack, KI-Agent, Drag &amp; Drop) benutze bitte einen Laptop oder Desktop.
+            <br /><br />
+            Auf dem Handy funktionieren <strong style={{ color: "#e0e0e0" }}>KI-Suche</strong> und <strong style={{ color: "#e0e0e0" }}>Chat</strong> gut — der Rest ist eingeschränkt.
+          </div>
+          <button
+            onClick={dismissMobileWarning}
+            style={{ padding: "12px 28px", borderRadius: 8, background: "#b9d94a", color: "#1a1a1c", border: "none", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", minHeight: 48 }}
+          >
+            Trotzdem fortfahren
+          </button>
+          <div style={{ marginTop: 14, fontSize: 11, color: "#5a5a5a" }}>Diese Warnung erscheint nicht erneut.</div>
+        </div>
+      )}
+      {/* Inner container — sur mobile on garde la largeur desktop min (1200px)
+          pour ne pas casser le layout, l'user scrolle horizontalement. */}
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: isMobile ? "100vh" : 0, minWidth: isMobile ? 1200 : 0 }}>
 
       {/* ─── Obere Leiste ─── */}
       <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", padding: "0 18px", background: "#161617", borderBottom: "1px solid #000", fontSize: 13 }}>
@@ -3437,11 +4169,55 @@ export default function Editor() {
           <S w={16} c="currentColor"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><path d="M17 21v-8H7v8M7 3v5h8" /></S>
           {saveStatus === "saving" ? "Speichern…" : saveStatus === "saved" ? "Gespeichert" : saveStatus === "error" ? "Fehler" : "Speichern"}
         </button>
-        <button
-          onClick={() => toast("Cloud-Sync noch nicht verfügbar — Timelines liegen lokal in Postgres (siehe Verlauf).", "info", 4000)}
-          style={{ display: "flex", alignItems: "center", gap: 6, color: "#c4c4c4", fontSize: 13 }}>
-          <S w={17} c="#c4c4c4"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" /></S>Cloud
-        </button>
+        <div data-menu style={{ position: "relative" }}>
+          <button
+            disabled={tlClips.length === 0}
+            onClick={() => setOpenMenu((c) => c === "senden" ? null : "senden")}
+            style={{ display: "flex", alignItems: "center", gap: 6, color: tlClips.length === 0 ? "#5a5a5a" : "#c4c4c4", fontSize: 13, cursor: tlClips.length === 0 ? "not-allowed" : "pointer", background: "transparent", border: "none", fontFamily: "inherit" }}
+            title="Timeline an eine NLE senden"
+          >
+            <S w={17} c="currentColor"><path d="M22 2 11 13" /><path d="M22 2l-7 20-4-9-9-4 20-7z" /></S>Senden
+          </button>
+          {openMenu === "senden" && (() => {
+            const menuAction = (app: NleApp, label: string) => () => {
+              setOpenMenu(null);
+              const vSegs: ExportSegment[] = tlClips
+                .filter((c) => (c.videoTrackIndex ?? 0) >= 0)
+                .map((c) => ({
+                  id: c.tlId,
+                  clip_id: c.clipId,
+                  track: `v${(c.videoTrackIndex ?? 0) + 1}`,
+                  start: c.start,
+                  dauer: c.duration,
+                  mediaStart: c.mediaStart,
+                }));
+              if (vSegs.length === 0) { toast("Timeline ist leer.", "warn", 1800); return; }
+              toast(`Sende an ${label}…`, "info", 1500);
+              sendToApp({ app, segments: vSegs, name: (projectName?.trim() || "CinAssist_Timeline") })
+                .then((r) => {
+                  if (r.status === "download" && r.download_url) {
+                    const a = document.createElement("a");
+                    a.href = r.download_url;
+                    a.download = r.datei.split("/").pop() || "timeline.fcpxml";
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                  }
+                  toast(r.nachricht, r.status === "importiert" ? "ok" : "info", 4500);
+                })
+                .catch((e: Error) => toast(`Senden fehlgeschlagen: ${e.message}`, "err", 5000));
+            };
+            const item: CSSProperties = { display: "block", width: "100%", textAlign: "left", padding: "7px 12px", borderRadius: 6, fontSize: 13, color: "#cfcfcf", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" };
+            return (
+              <div style={{ position: "absolute", top: 34, right: 0, background: "#242426", borderRadius: 8, padding: 4, zIndex: 50, boxShadow: "0 8px 24px rgba(0,0,0,.5)", minWidth: 200 }}>
+                <button style={item} onClick={menuAction("davinci", "DaVinci Resolve")}>DaVinci Resolve</button>
+                <button style={item} onClick={menuAction("premiere", "Premiere Pro")}>Premiere Pro</button>
+                <button style={item} onClick={menuAction("fcp", "Final Cut Pro")}>Final Cut Pro</button>
+                <button style={item} onClick={menuAction("avid", "Avid Media Composer")}>AVID Media Composer</button>
+              </div>
+            );
+          })()}
+        </div>
         <div data-menu style={{ position: "relative", marginLeft: 14 }}>
           <button onClick={() => setOpenMenu((c) => c === "more" ? null : "more")}
             style={{ width: 28, height: 28, borderRadius: "50%", background: openMenu === "more" ? "#3a3a3e" : "#242426", display: "flex", alignItems: "center", justifyContent: "center" }} title="Mehr">
@@ -3451,7 +4227,7 @@ export default function Editor() {
             <div style={{ position: "absolute", top: 34, right: 0, background: "#242426", borderRadius: 8, padding: 4, zIndex: 50, boxShadow: "0 8px 24px rgba(0,0,0,.5)", minWidth: 200 }}>
               <button style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 12px", borderRadius: 6, fontSize: 13, color: "#cfcfcf", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }} onClick={() => { setSettingsOpen(true); setOpenMenu(null); }}>Einstellungen…</button>
               <button style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 12px", borderRadius: 6, fontSize: 13, color: "#cfcfcf", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }} onClick={() => { toggleFullscreen(); setOpenMenu(null); }}>Vollbild</button>
-              <button style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 12px", borderRadius: 6, fontSize: 13, color: "#cfcfcf", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }} onClick={() => { toast(`${tlClips.length} Clips · ${fmtSec(totalDuration)} · Zoom ${Math.round(zoom * 100)}%`, "info", 4000); setOpenMenu(null); }}>Statistiken</button>
+              <button style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 12px", borderRadius: 6, fontSize: 13, color: "#cfcfcf", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }} onClick={() => { toast(`${tlClips.length} Clips · ${fmtSec(actualClipsEnd)} · Zoom ${Math.round(zoom * 100)}%`, "info", 4000); setOpenMenu(null); }}>Statistiken</button>
             </div>
           )}
         </div>
@@ -3648,6 +4424,21 @@ export default function Editor() {
             <Panel defaultSize={28} minSize={15} style={{ minWidth: 0 }}>
               <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", borderLeft: "1px solid #000", background: "#0f0f10" }}>
           <div style={{ height: 56, flex: "none", display: "flex", alignItems: "center", padding: "0 16px", gap: 10, borderBottom: "1px solid #1c1c1e", position: "relative" }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,.mp4,.mov,.avi,.mkv,.webm"
+              style={{ display: "none" }}
+              onChange={(e) => { if (e.target.files) handleFiles(e.target.files); e.target.value = ""; }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              title="Video hochladen"
+              style={{ display: "flex", alignItems: "center", gap: 5, height: 28, padding: "0 10px", borderRadius: 6, background: "#b9d94a", color: "#1a1a1c", fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer" }}
+            >
+              <S w={14} c="#1a1a1c" sw={2.4}><path d="M12 5v14M5 12h14" /></S>Upload
+            </button>
             <div data-menu style={{ position: "relative" }}>
               <button onClick={() => setOpenMenu((c) => c === "filter" ? null : "filter")} style={{ display: "flex", alignItems: "center", gap: 6, color: mediaFilter !== "all" ? "#e0b84a" : "#c4c4c4", fontSize: 13, fontWeight: 600 }}>
                 <S c={mediaFilter !== "all" ? "#e0b84a" : "#c4c4c4"}><path d="M4 6h10M4 12h7M4 18h12" /><circle cx="18" cy="6" r="2" /><circle cx="15" cy="12" r="2" /><circle cx="20" cy="18" r="2" /></S>Filter
@@ -3695,57 +4486,360 @@ export default function Editor() {
           </div>
 
           {showSearch && (
-            <div style={{ padding: "10px 16px 4px" }}>
+            <div style={{ padding: "10px 16px 4px", borderBottom: searchResults.length > 0 || searchMeta ? "1px solid #1c1c1e" : "none" }}>
               <form onSubmit={(e) => { e.preventDefault(); runSearch(); }} style={{ display: "flex", gap: 6 }}>
-                <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="z. B. 'sunset drone shot'…"
-                  style={{ flex: 1, height: 32, padding: "0 10px", background: "#1a1a1c", border: "1px solid #232326", borderRadius: 8, color: "#e0e0e0", fontSize: 12, fontFamily: "inherit", outline: "none" }} />
-                <button type="submit" style={{ padding: "0 12px", height: 32, borderRadius: 8, background: "#3a2a5a", color: "#c9a4ff", fontSize: 12, fontWeight: 600, border: "1px solid #4a3a6a" }}>Suchen</button>
-              </form>
-              {searchResults.length > 0 && (
-                <div style={{ marginTop: 8, maxHeight: 120, overflowY: "auto", background: "#151517", borderRadius: 8, padding: 4 }}>
-                  {searchResults.map((r) => (
+                <div style={{ position: "relative", flex: 1 }}>
+                  <div style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", pointerEvents: "none", display: "flex" }}>
+                    {searchBusy
+                      ? <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#b9d94a" strokeWidth={2.4} strokeLinecap="round" strokeDasharray="14 42" style={{ animation: "spin 0.9s linear infinite" }}><circle cx="12" cy="12" r="9" /></svg>
+                      : <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#8a8a8a" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>}
+                  </div>
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="KI-Suche · z. B. 'sunset drone shot', 'Person spricht', 'Straßenszene'…"
+                    style={{ width: "100%", height: 32, padding: "0 30px 0 32px", background: "#1a1a1c", border: "1px solid #232326", borderRadius: 8, color: "#e0e0e0", fontSize: 12, fontFamily: "inherit", outline: "none" }}
+                  />
+                  {search && (
                     <button
-                      key={r.scene_id}
-                      onClick={() => {
-                        // Trouve un clip sur la timeline avec le même clip_name → seek à son start
-                        const tl = tlClips.find((c) => c.name === r.clip_name.replace(/\.[^/.]+$/, ""));
-                        if (tl) {
-                          seekSeconds(tl.start);
-                          setSelectedTlIds(new Set([tl.tlId]));
-                          toast(`Sprung zu ${r.clip_name}.`, "ok", 1500);
-                        } else {
-                          // Sinon on ajoute le clip source à la fin de la timeline
-                          const src = clips.find((c) => c.dateiname === r.clip_name);
-                          if (src) {
-                            appendClip(src.id);
-                            toast(`${r.clip_name} zur Timeline hinzugefügt.`, "ok");
-                          } else {
-                            toast(`Clip nicht in Medien gefunden.`, "warn");
-                          }
-                        }
-                      }}
-                      style={{
-                        padding: "5px 8px", borderRadius: 4, fontSize: 11, color: "#cfcfcf",
-                        display: "flex", justifyContent: "space-between", gap: 8,
-                        width: "100%", textAlign: "left", background: "transparent",
-                        border: "none", cursor: "pointer", fontFamily: "inherit",
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,.04)")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      type="button"
+                      onClick={() => { setSearch(""); setSearchResults([]); setSearchMeta(null); }}
+                      title="Löschen"
+                      style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", padding: 4, background: "transparent", border: "none", color: "#7a7a7a", cursor: "pointer", display: "flex" }}
                     >
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{r.clip_name}: {r.description.slice(0, 30)}…</span>
-                      <span style={{ color: "#e0b84a", fontFamily: "ui-monospace, monospace" }}>{(r.similarity * 100).toFixed(0)}%</span>
+                      <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M15 9l-6 6M9 9l6 6" /></svg>
                     </button>
-                  ))}
+                  )}
+                </div>
+                <button
+                  type="submit"
+                  disabled={!search.trim() || searchBusy}
+                  style={{ padding: "0 14px", height: 32, borderRadius: 8, background: !search.trim() || searchBusy ? "#2a2338" : "#3a2a5a", color: !search.trim() || searchBusy ? "#5a5a5a" : "#c9a4ff", fontSize: 12, fontWeight: 600, border: "1px solid #4a3a6a", cursor: !search.trim() || searchBusy ? "not-allowed" : "pointer" }}
+                >
+                  KI-Suche
+                </button>
+                <button
+                  type="button"
+                  onClick={addBookmark}
+                  disabled={!search.trim() || bookmarkedQueries.some((b) => b.query.toLowerCase() === search.trim().toLowerCase())}
+                  title="Als Smart-Bin speichern"
+                  style={{ width: 32, height: 32, borderRadius: 8, background: "transparent", color: search.trim() && !bookmarkedQueries.some((b) => b.query.toLowerCase() === search.trim().toLowerCase()) ? "#e0b84a" : "#4a4a4a", border: `1px solid ${search.trim() ? "#3a3a3e" : "#2a2a2c"}`, cursor: search.trim() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center" }}
+                >
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+                </button>
+              </form>
+              {searchMeta && (
+                <div style={{ marginTop: 6, fontSize: 10, color: searchMeta.error ? "#e07a7a" : "#7a7a7a", display: "flex", justifyContent: "space-between", fontFamily: "ui-monospace, monospace" }}>
+                  <span>
+                    {searchMeta.error
+                      ? `Fehler: ${searchMeta.error}`
+                      : `${searchMeta.count} von ${searchMeta.scanned} Szenen`}
+                  </span>
+                  {!searchMeta.error && <span>{searchMeta.ms.toFixed(0)} ms</span>}
+                </div>
+              )}
+              {searchMeta && searchMeta.rewritten && !searchMeta.error && (
+                <div title="Deine Anfrage wurde von llama3 mit visuellen Attributen angereichert (bessere CLIP-Ergebnisse)." style={{ marginTop: 4, fontSize: 10, color: "#7fa4d4", fontStyle: "italic", display: "flex", alignItems: "flex-start", gap: 5, lineHeight: 1.35 }}>
+                  <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ flex: "none", marginTop: 2 }}><path d="M9.5 3v4L6 10.5l3.5 3.5v4H14v-4l3.5-3.5L14 7V3H9.5z" /></svg>
+                  <span style={{ opacity: 0.85 }}>KI-erweitert: {searchMeta.rewritten}</span>
+                </div>
+              )}
+              {/* Chips shortcuts — visibles quand l'input est vide ET pas de résultats
+                  en cours. Smart Bins (bookmarks) + Recent queries (localStorage) + suggested tags. */}
+              {!search.trim() && searchResults.length === 0 && !searchBusy && (
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {bookmarkedQueries.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, color: "#6a6a6a", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Smart Bins</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {bookmarkedQueries.map((b) => (
+                          <span key={`bm-${b.query}`} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 4px 3px 8px", borderRadius: 999, background: "rgba(224,184,80,0.12)", border: "1px solid rgba(224,184,80,0.4)", color: "#e0b84a", fontSize: 10.5, fontFamily: "inherit", fontWeight: 600 }}>
+                            <button
+                              onClick={() => { setSearch(b.query); setTimeout(runSearch, 0); }}
+                              title={b.query}
+                              style={{ background: "transparent", border: "none", color: "inherit", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit", fontWeight: "inherit", padding: 0, display: "flex", alignItems: "center", gap: 4 }}
+                            >
+                              <svg width={9} height={9} viewBox="0 0 24 24" fill="currentColor" style={{ opacity: 0.8 }}><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+                              {b.label}
+                            </button>
+                            <button
+                              onClick={() => removeBookmark(b.query)}
+                              title="Entfernen"
+                              style={{ background: "transparent", border: "none", color: "rgba(224,184,80,0.55)", cursor: "pointer", padding: "0 2px", display: "flex", alignItems: "center" }}
+                            >
+                              <svg width={8} height={8} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {recentQueries.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: 10, color: "#6a6a6a", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Zuletzt gesucht</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                        {recentQueries.map((q) => (
+                          <button
+                            key={`rq-${q}`}
+                            onClick={() => { setSearch(q); setTimeout(runSearch, 0); }}
+                            style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 999, background: "#1c1c1e", border: "1px solid #2a2a2c", color: "#c4c4c4", fontSize: 10.5, cursor: "pointer", fontFamily: "inherit" }}
+                          >
+                            <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.55 }}><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 2.5" /></svg>
+                            {q}
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => { setRecentQueries([]); try { localStorage.removeItem("cinassist-recent-queries"); } catch { /* ignore */ } }}
+                          title="Verlauf leeren"
+                          style={{ padding: "3px 6px", borderRadius: 999, background: "transparent", border: "1px dashed rgba(255,255,255,0.10)", color: "#5a5a5a", fontSize: 10, cursor: "pointer", fontFamily: "inherit" }}
+                        >
+                          leeren
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <div style={{ fontSize: 10, color: "#6a6a6a", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.4 }}>Vorschläge · erkunden</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {SUGGESTED_TAGS.map((t) => (
+                        <button
+                          key={`st-${t.label}`}
+                          onClick={() => { setSearch(t.query); setTimeout(runSearch, 0); }}
+                          title={t.query}
+                          style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 999, background: "rgba(58,42,90,0.35)", border: "1px solid rgba(74,58,106,0.7)", color: "#c9a4ff", fontSize: 10.5, cursor: "pointer", fontFamily: "inherit" }}
+                        >
+                          <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.65 }}><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z" /></svg>
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* Filtres inline — refiltre les résultats reçus (zero backend). */}
+              {searchResults.length > 0 && (() => {
+                const chipStyle = (active: boolean): CSSProperties => ({
+                  display: "flex", alignItems: "center", gap: 4,
+                  padding: "3px 9px", borderRadius: 999,
+                  background: active ? "rgba(224,184,80,0.18)" : "#1a1a1c",
+                  border: `1px solid ${active ? "#e0b84a" : "#2a2a2c"}`,
+                  color: active ? "#e0b84a" : "#9a9a9a",
+                  fontSize: 10.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
+                });
+                const filteredCount = filteredSearchResults.length;
+                const droppedCount = searchResults.length - filteredCount;
+                const groupsCount = groupedSearchResults.length;
+                return (
+                  <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center" }}>
+                      <button
+                        onClick={() => setSearchFilters((s) => ({ ...s, dialog: !s.dialog }))}
+                        style={chipStyle(searchFilters.dialog)}
+                        title="Nur Szenen mit Transkription"
+                      >
+                        <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+                        Mit Dialog
+                      </button>
+                      <button
+                        onClick={() => setSearchFilters((s) => ({ ...s, closeup: !s.closeup }))}
+                        style={chipStyle(searchFilters.closeup)}
+                        title="Nur Close-up-Framings"
+                      >
+                        <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></svg>
+                        Close-up
+                      </button>
+                      <button
+                        onClick={() => setSearchFilters((s) => ({ ...s, ohnePersonen: !s.ohnePersonen }))}
+                        style={chipStyle(searchFilters.ohnePersonen)}
+                        title="Nur Szenen ohne erkannte Personen"
+                      >
+                        <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="7" r="4" /><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" /><path d="M4 4l16 16" /></svg>
+                        Ohne Personen
+                      </button>
+                      <span style={{ flex: 1 }} />
+                      <button
+                        onClick={() => setSearchFilters((s) => ({ ...s, groupByClip: !s.groupByClip }))}
+                        style={chipStyle(searchFilters.groupByClip)}
+                        title="Ergebnisse nach Ausgangsclip gruppieren"
+                      >
+                        <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="18" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
+                        Nach Clip gruppieren
+                      </button>
+                    </div>
+                    {droppedCount > 0 && (
+                      <div style={{ fontSize: 10, color: "#6a6a6a", fontFamily: "ui-monospace, monospace" }}>
+                        {filteredCount} · {droppedCount} durch Filter ausgeblendet
+                        {searchFilters.groupByClip ? ` · ${groupsCount} Clip${groupsCount > 1 ? "s" : ""}` : ""}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              {filteredSearchResults.length > 0 && (
+                <div style={{ marginTop: 8, maxHeight: 340, overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+                  {searchFilters.groupByClip
+                    ? groupedSearchResults.flatMap((g) => {
+                        const expanded = expandedClipGroups.has(g.clip_id);
+                        const groupHeader = (
+                          <button
+                            key={`grp-${g.clip_id}`}
+                            onClick={() => toggleGroup(g.clip_id)}
+                            style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", borderRadius: 7, background: "#151517", border: "1px solid #2a2a2c", textAlign: "left", cursor: "pointer", fontFamily: "inherit" }}
+                          >
+                            <svg width={10} height={10} viewBox="0 0 24 24" fill="none" stroke="#8a8a8a" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" style={{ transform: expanded ? "rotate(90deg)" : "none", transition: "transform 0.15s" }}><path d="M9 6l6 6-6 6" /></svg>
+                            <span style={{ flex: 1, fontSize: 12, color: "#e0e0e0", fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{g.clip_name}</span>
+                            <span style={{ fontSize: 10, color: "#8a8a8a", fontFamily: "ui-monospace, monospace" }}>{g.scenes.length} Szene{g.scenes.length > 1 ? "n" : ""}</span>
+                            <span style={{ fontSize: 10, color: "#e0b84a", fontFamily: "ui-monospace, monospace", fontWeight: 700 }}>{Math.round(g.bestSim * 100)}%</span>
+                          </button>
+                        );
+                        if (!expanded) return [groupHeader];
+                        return [groupHeader, ...g.scenes.map((r) => renderSceneCard(r))];
+                      })
+                    : filteredSearchResults.map((r) => renderSceneCard(r))}
+                </div>
+              )}
+              {filteredSearchResults.length === 0 && searchResults.length > 0 && (
+                <div style={{ marginTop: 10, padding: "10px 8px", fontSize: 11, color: "#7a7a7a", textAlign: "center" }}>
+                  Alle Ergebnisse wurden durch die Filter ausgeblendet.
+                </div>
+              )}
+              {searchMeta && searchResults.length === 0 && !searchMeta.error && (
+                <div style={{ marginTop: 10, padding: "10px 8px", fontSize: 11, color: "#7a7a7a", textAlign: "center", lineHeight: 1.5 }}>
+                  Keine Szene passt zu «{search}».<br />
+                  <span style={{ fontSize: 10, color: "#5a5a5a" }}>Tipp: Beschreibe die Szene visuell (« Straßenaufnahme », « Portrait Close-up »).</span>
+                </div>
+              )}
+              {/* Panier de comparaison — floating bar quand ≥1 sélectionné.
+                  ≥2 = "Vergleichen" activable, sinon greyed out. */}
+              {compareBasket.length > 0 && (
+                <div style={{ marginTop: 10, padding: "6px 10px", borderRadius: 8, background: "#1a2532", border: "1px solid #2a3e58", display: "flex", alignItems: "center", gap: 8 }}>
+                  <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="#7fa4d4" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
+                  <span style={{ flex: 1, fontSize: 11, color: "#c4d4e8" }}>
+                    {compareBasket.length} von 4 Takes ausgewählt
+                    {compareBasket.length < 2 && <span style={{ color: "#7a8a9a", marginLeft: 6 }}>· min. 2 zum Vergleich</span>}
+                  </span>
+                  <button
+                    onClick={() => setCompareBasket([])}
+                    title="Leeren"
+                    style={{ padding: "3px 6px", background: "transparent", border: "1px solid rgba(255,255,255,0.1)", color: "#8a9aa8", fontSize: 10, borderRadius: 4, cursor: "pointer", fontFamily: "inherit" }}
+                  >
+                    leeren
+                  </button>
+                  <button
+                    onClick={runCompare}
+                    disabled={compareBasket.length < 2}
+                    style={{ padding: "4px 12px", background: compareBasket.length < 2 ? "#2a3e58" : "#4a7fc0", color: compareBasket.length < 2 ? "#5a6a7a" : "#fff", border: "none", borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: compareBasket.length < 2 ? "not-allowed" : "pointer", fontFamily: "inherit" }}
+                  >
+                    Vergleichen
+                  </button>
                 </div>
               )}
             </div>
           )}
 
-          <div style={{ flex: 1, overflow: "auto", padding: "12px 16px", minHeight: 0 }}>
+          <div
+            ref={mediaGridRef}
+            onMouseDown={(e) => {
+              if (e.button !== 0) return;
+              const target = e.target as HTMLElement;
+              if (target.closest("[data-media-id]")) return; // clic sur un item → pas marquee
+              const container = mediaGridRef.current;
+              if (!container) return;
+              const rect = container.getBoundingClientRect();
+              const x0 = e.clientX - rect.left + container.scrollLeft;
+              const y0 = e.clientY - rect.top + container.scrollTop;
+              const additive = e.shiftKey || e.metaKey || e.ctrlKey;
+              const startSel = additive ? new Set(selectedMedia) : new Set<string>();
+              setMediaMarquee({ x0, y0, x1: x0, y1: y0 });
+
+              const onMove = (ev: MouseEvent) => {
+                const rr = container.getBoundingClientRect();
+                const x1 = ev.clientX - rr.left + container.scrollLeft;
+                const y1 = ev.clientY - rr.top + container.scrollTop;
+                setMediaMarquee({ x0, y0, x1, y1 });
+                // Live update selection
+                const mLeft = Math.min(x0, x1), mTop = Math.min(y0, y1);
+                const mRight = Math.max(x0, x1), mBot = Math.max(y0, y1);
+                const cRect = container.getBoundingClientRect();
+                const cScrollL = container.scrollLeft, cScrollT = container.scrollTop;
+                const next = new Set(startSel);
+                container.querySelectorAll<HTMLElement>("[data-media-id]").forEach((el) => {
+                  const b = el.getBoundingClientRect();
+                  const bx0 = b.left - cRect.left + cScrollL;
+                  const by0 = b.top - cRect.top + cScrollT;
+                  const bx1 = bx0 + b.width, by1 = by0 + b.height;
+                  const hit = bx0 < mRight && bx1 > mLeft && by0 < mBot && by1 > mTop;
+                  const id = el.getAttribute("data-media-id");
+                  if (id && hit) next.add(id);
+                });
+                setSelectedMedia(next);
+              };
+              const onUp = () => {
+                setMediaMarquee(null);
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+              };
+              window.addEventListener("mousemove", onMove);
+              window.addEventListener("mouseup", onUp);
+              e.preventDefault();
+            }}
+            onDragOver={(e) => {
+              // Native OS file drop → afficher zone active + accepter la copie.
+              if (e.dataTransfer.types.includes("Files")) {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                if (!dropTargetActive) setDropTargetActive(true);
+              }
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget === e.target) setDropTargetActive(false);
+            }}
+            onDrop={(e) => {
+              if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                e.preventDefault();
+                setDropTargetActive(false);
+                handleFiles(e.dataTransfer.files);
+              }
+            }}
+            style={{ flex: 1, overflow: "auto", padding: "12px 16px", minHeight: 0, position: "relative", userSelect: mediaMarquee ? "none" : "auto", outline: dropTargetActive ? "2px dashed #b9d94a" : "none", outlineOffset: -8, background: dropTargetActive ? "rgba(185,217,74,0.06)" : undefined }}
+          >
             {loading && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>Clips werden geladen…</div>}
-            {!loading && gridMedia.length === 0 && !error && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>Keine Clips gefunden.</div>}
+            {!loading && gridMedia.length === 0 && !error && uploadQueue.length === 0 && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>Keine Clips — ziehe Videos hier hin oder klicke oben auf Upload.</div>}
             {error && !loading && <div style={{ textAlign: "center", color: "#e07a7a", padding: 20, fontSize: 11 }}>Backend offline: {error}</div>}
+            {uploadQueue.length > 0 && (
+              <div style={{ marginBottom: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                {uploadQueue.map((it) => (
+                  <div key={it.id} style={{ background: "#1a1a1c", border: "1px solid #2a2a2c", borderRadius: 6, padding: "6px 8px", fontSize: 11 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      {it.status === "error"
+                        ? <S w={12} c="#e07a7a"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></S>
+                        : it.status === "analyzing" || it.status === "done"
+                          ? <S w={12} c="#4ec06a"><path d="M20 6L9 17l-5-5" /></S>
+                          : <S w={12} c="#b9d94a" style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>}
+                      <span style={{ flex: 1, color: "#d4d4d4", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name}</span>
+                      <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, color: "#8a8a8a" }}>
+                        {it.status === "uploading" ? `${it.progress}%` : it.status === "analyzing" ? "Analyse…" : it.status === "error" ? "Fehler" : "OK"}
+                      </span>
+                    </div>
+                    {it.status === "uploading" && (
+                      <div style={{ height: 3, background: "#0a0a0b", borderRadius: 2, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${it.progress}%`, background: "#b9d94a", transition: "width 0.2s" }} />
+                      </div>
+                    )}
+                    {it.status === "error" && it.error && (
+                      <div style={{ fontSize: 10, color: "#e07a7a", marginTop: 2 }}>{it.error}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {mediaMarquee && (() => {
+              const l = Math.min(mediaMarquee.x0, mediaMarquee.x1);
+              const t = Math.min(mediaMarquee.y0, mediaMarquee.y1);
+              const w = Math.abs(mediaMarquee.x1 - mediaMarquee.x0);
+              const h = Math.abs(mediaMarquee.y1 - mediaMarquee.y0);
+              return <div style={{ position: "absolute", left: l, top: t, width: w, height: h, background: "rgba(229,193,0,0.10)", border: "1px dashed #e5c100", pointerEvents: "none", zIndex: 30 }} />;
+            })()}
             {mediaView === "grid" ? (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
                 {gridMedia.map((c, i) => {
@@ -3753,15 +4847,34 @@ export default function Editor() {
                   const strip = abs(c.strip_url);
                   const isMusic = !!c.waveform_url;
                   return (
-                    <button key={c.id} onClick={() => toggleMedia(c.id)} onDoubleClick={() => appendClip(c.id)}
+                    <button key={c.id} data-media-id={c.id} onClick={(e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) toggleMedia(c.id); else setSelectedMedia(new Set([c.id])); }} onDoubleClick={() => appendClip(c.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault(); e.stopPropagation();
+                        // Si le clip fait partie d'une sélection multi, on cible toute la sélection
+                        // pour la suppression ; sinon on ne cible que ce clip et on le sélectionne.
+                        const inSel = selectedMedia.has(c.id);
+                        const targets = inSel && selectedMedia.size > 1 ? Array.from(selectedMedia) : [c.id];
+                        if (!inSel) setSelectedMedia(new Set([c.id]));
+                        openMenuAt(e.clientX, e.clientY, [
+                          { label: "Analyse anzeigen", onClick: () => setAnalysisClipId(c.id) },
+                          { label: "Auf Timeline hinzufügen", onClick: () => appendClip(c.id) },
+                          { separator: true },
+                          { label: targets.length > 1 ? `${targets.length} Clips löschen…` : "Löschen…", kbd: "Entf", onClick: () => deleteMedia(targets) },
+                        ]);
+                      }}
                       draggable
                       onDragStart={(e) => {
+                        const ids = sel && selectedMedia.size > 1 ? Array.from(selectedMedia) : [c.id];
                         e.dataTransfer.setData("text/plain", c.id);
                         e.dataTransfer.setData("application/x-cinassist-media", c.id);
+                        if (ids.length > 1) e.dataTransfer.setData("application/x-cinassist-media-multi", JSON.stringify(ids));
                         e.dataTransfer.effectAllowed = "copy";
-                        mediaDragRef.current = { id: c.id, duration: c.dauer || 5, name: c.dateiname.replace(/\.[^/.]+$/, ""), stripUrl: abs(c.strip_url) };
+                        const multi = ids.length > 1
+                          ? ids.map((id) => { const s = clips.find((x) => x.id === id); return s ? { id, duration: s.dauer || 5, name: s.dateiname.replace(/\.[^/.]+$/, ""), stripUrl: abs(s.strip_url), hasAudio: !!s.waveform_url } : null; }).filter(Boolean) as Array<{ id: string; duration: number; name: string; stripUrl: string | null; hasAudio: boolean }>
+                          : undefined;
+                        mediaDragRef.current = { id: c.id, duration: c.dauer || 5, name: c.dateiname.replace(/\.[^/.]+$/, ""), stripUrl: abs(c.strip_url), hasAudio: !!c.waveform_url, multi };
                       }}
-                      onDragEnd={() => { mediaDragRef.current = null; setDropPreview(null); }}
+                      onDragEnd={() => { mediaDragRef.current = null; mediaDropResolvedRef.current = null; setDropPreview(null); }}
                       title={`${c.dateiname} — Doppelklick oder Ziehen auf Timeline`}
                       style={{ borderRadius: 7, overflow: "hidden", background: "#1a1a1c", textAlign: "left", outline: sel ? "2px solid #e5c100" : "none", cursor: "grab" }}>
                       <div style={{ position: "relative", height: 68, background: strip ? `url(${strip}) center/cover no-repeat` : FALLBACK_GRADS[i % FALLBACK_GRADS.length] }}>
@@ -3782,15 +4895,34 @@ export default function Editor() {
                   const sel = selectedMedia.has(c.id);
                   const isMusic = !!c.waveform_url;
                   return (
-                    <button key={c.id} onClick={() => toggleMedia(c.id)} onDoubleClick={() => appendClip(c.id)}
+                    <button key={c.id} data-media-id={c.id} onClick={(e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) toggleMedia(c.id); else setSelectedMedia(new Set([c.id])); }} onDoubleClick={() => appendClip(c.id)}
+                      onContextMenu={(e) => {
+                        e.preventDefault(); e.stopPropagation();
+                        // Si le clip fait partie d'une sélection multi, on cible toute la sélection
+                        // pour la suppression ; sinon on ne cible que ce clip et on le sélectionne.
+                        const inSel = selectedMedia.has(c.id);
+                        const targets = inSel && selectedMedia.size > 1 ? Array.from(selectedMedia) : [c.id];
+                        if (!inSel) setSelectedMedia(new Set([c.id]));
+                        openMenuAt(e.clientX, e.clientY, [
+                          { label: "Analyse anzeigen", onClick: () => setAnalysisClipId(c.id) },
+                          { label: "Auf Timeline hinzufügen", onClick: () => appendClip(c.id) },
+                          { separator: true },
+                          { label: targets.length > 1 ? `${targets.length} Clips löschen…` : "Löschen…", kbd: "Entf", onClick: () => deleteMedia(targets) },
+                        ]);
+                      }}
                       draggable
                       onDragStart={(e) => {
+                        const ids = sel && selectedMedia.size > 1 ? Array.from(selectedMedia) : [c.id];
                         e.dataTransfer.setData("text/plain", c.id);
                         e.dataTransfer.setData("application/x-cinassist-media", c.id);
+                        if (ids.length > 1) e.dataTransfer.setData("application/x-cinassist-media-multi", JSON.stringify(ids));
                         e.dataTransfer.effectAllowed = "copy";
-                        mediaDragRef.current = { id: c.id, duration: c.dauer || 5, name: c.dateiname.replace(/\.[^/.]+$/, ""), stripUrl: abs(c.strip_url) };
+                        const multi = ids.length > 1
+                          ? ids.map((id) => { const s = clips.find((x) => x.id === id); return s ? { id, duration: s.dauer || 5, name: s.dateiname.replace(/\.[^/.]+$/, ""), stripUrl: abs(s.strip_url), hasAudio: !!s.waveform_url } : null; }).filter(Boolean) as Array<{ id: string; duration: number; name: string; stripUrl: string | null; hasAudio: boolean }>
+                          : undefined;
+                        mediaDragRef.current = { id: c.id, duration: c.dauer || 5, name: c.dateiname.replace(/\.[^/.]+$/, ""), stripUrl: abs(c.strip_url), hasAudio: !!c.waveform_url, multi };
                       }}
-                      onDragEnd={() => { mediaDragRef.current = null; setDropPreview(null); }}
+                      onDragEnd={() => { mediaDragRef.current = null; mediaDropResolvedRef.current = null; setDropPreview(null); }}
                       title={`${c.dateiname} — Doppelklick oder Ziehen auf Timeline`}
                       style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6, background: sel ? "#1a3a3a" : "#1a1a1c", textAlign: "left", cursor: "grab", border: sel ? "1px solid #e5c100" : "1px solid transparent" }}>
                       {isMusic ? <MusicIcon w={12} c="#7fd4c4" /> : <FilmIcon c="#9a9a9a" />}
@@ -3809,6 +4941,16 @@ export default function Editor() {
             <span style={{ flex: 1, textAlign: "center", color: "#8a8a8a" }}>
               {selectedMedia.size > 0 ? `${selectedMedia.size} ausgewählt` : `${clips.length} Elemente ‖ ${fmtSec(clips.reduce((s, c) => s + (c.dauer || 0), 0))}`}
             </span>
+            {selectedMedia.size > 0 && (
+              <button
+                onClick={() => deleteMedia(Array.from(selectedMedia))}
+                title={`${selectedMedia.size} Clip(s) löschen (Entf)`}
+                style={{ marginRight: 8, display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 5, background: "rgba(224,122,122,0.10)", color: "#e07a7a", border: "1px solid rgba(224,122,122,0.35)", fontSize: 11, fontWeight: 600, cursor: "pointer" }}
+              >
+                <S w={12} c="#e07a7a" sw={2}><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></S>
+                Löschen
+              </button>
+            )}
             <S w={15} c="#b5b5b5"><circle cx="12" cy="12" r="9" /><path d="M8.5 12l2.5 2.5L15.5 9.5" /></S>
             <button style={{ marginLeft: 6, color: "#b5b5b5", fontSize: 12 }} onClick={() => setSelectedMedia(selectedMedia.size ? new Set() : new Set(clips.map((c) => c.id)))}>Auswählen</button>
           </div>
@@ -3867,9 +5009,48 @@ export default function Editor() {
               basé sur l'index/reorder, pas sur un positionnement libre en px) */}
           <TI c={snapEnabled ? "#e5c100" : "#cfcfcf"}><path d="M6 3v7a6 6 0 0 0 12 0V3" /><path d="M6 3H3M21 3h-3M6 10H3M21 10h-3" /></TI>
         </ToolBtn>
-        <ToolBtn title="Video+Audio verknüpfen — Coming soon" onClick={() => toast("Link/Unlink von Video+Audio-Paar — Coming soon.", "info", 2500)}>
-          <TI><path d="M9 15l6-6M8 12l-2 2a3 3 0 0 0 4 4l2-2M16 12l2-2a3 3 0 0 0-4-4l-2 2" /></TI>
-        </ToolBtn>
+        {(() => {
+          const targets = tlClips.filter((c) => selectedTlIds.has(c.tlId) && c.hasAudio);
+          const nSel = targets.length;
+          const allLinked = nSel > 0 && targets.every((c) => c.avLinked !== false);
+          const allUnlinked = nSel > 0 && targets.every((c) => c.avLinked === false);
+          const active = nSel > 0 && allLinked; // jaune quand LIÉ, blanc quand séparé
+          const disabled = nSel === 0;
+          const title = disabled
+            ? "Video+Audio — Wähle zuerst einen Clip mit Audio"
+            : allLinked
+              ? `A/V trennen (${nSel} Clip${nSel > 1 ? "s" : ""})`
+              : allUnlinked
+                ? `A/V verknüpfen (${nSel} Clip${nSel > 1 ? "s" : ""})`
+                : `A/V verknüpfen (gemischt — ${nSel} Clip${nSel > 1 ? "s" : ""})`;
+          const doToggle = () => {
+            if (disabled) { toast("Wähle einen Clip mit Audio.", "warn", 1500); return; }
+            // Si tous linkés → unlink all. Sinon → link all (harmonisation).
+            const shouldUnlink = allLinked;
+            for (const c of targets) {
+              if (shouldUnlink) unlinkAV(c.tlId);
+              else linkAV(c.tlId);
+            }
+          };
+          return (
+            <ToolBtn title={title} active={active} disabled={disabled} onClick={doToggle}>
+              <TI c={active ? "#e5c100" : "#cfcfcf"}>
+                {allLinked ? (
+                  <>
+                    <path d="M10 13a5 5 0 0 0 7 0l1-1a5 5 0 0 0-7-7l-1 1" />
+                    <path d="M14 11a5 5 0 0 0-7 0l-1 1a5 5 0 0 0 7 7l1-1" />
+                  </>
+                ) : (
+                  <>
+                    <path d="M10 13a5 5 0 0 0 7 0l1-1a5 5 0 0 0-7-7l-1 1" />
+                    <path d="M14 11a5 5 0 0 0-7 0l-1 1a5 5 0 0 0 7 7l1-1" />
+                    <path d="M4 4l16 16" />
+                  </>
+                )}
+              </TI>
+            </ToolBtn>
+          );
+        })()}
         <ToolBtn
           title={`Sperren / Entsperren${lockedTlIds.size ? ` — ${lockedTlIds.size} gesperrt` : ""}`}
           disabled={selectedTlIds.size === 0}
@@ -4088,44 +5269,66 @@ export default function Editor() {
           onContextMenu={openEmptyMenu}
           onScroll={(e) => { if (trackHeaderInnerRef.current) trackHeaderInnerRef.current.style.transform = `translateY(${-e.currentTarget.scrollTop}px)`; }}
           onDragOver={(e) => {
-            if (e.dataTransfer.types.includes("application/x-cinassist-media") || e.dataTransfer.types.includes("application/x-cinassist-tl")) {
+            if (e.dataTransfer.types.includes("application/x-cinassist-media") || e.dataTransfer.types.includes("application/x-cinassist-tl") || e.dataTransfer.types.includes("application/x-cinassist-scene")) {
               e.preventDefault();
               e.dataTransfer.dropEffect = e.dataTransfer.types.includes("application/x-cinassist-tl") ? "move" : "copy";
               // Preview du drop : ghost sur la timeline montrant la position et
               // la durée du clip en cours de drag depuis Medien.
               const media = mediaDragRef.current;
-              if (media && totalDuration > 0) {
+              if (media) {
                 const container = e.currentTarget as HTMLDivElement;
                 const inner = container.firstElementChild as HTMLDivElement;
                 const innerW = inner ? inner.offsetWidth : container.clientWidth;
                 const scrollLeft = container.scrollLeft;
                 const relX = e.clientX - container.getBoundingClientRect().left + scrollLeft - 16;
-                let startTime = Math.max(0, (relX / innerW) * totalDuration);
-                const pxPerSec = innerW / totalDuration;
-                // Snap magnétique (edges d'autres clips, playhead, markers, t=0)
-                let snapPct: number | null = null;
-                if (snapEnabled && !e.altKey) {
+                // Sur timeline vide, on utilise une échelle par défaut (5 px/sec)
+                // pour permettre le preview quand même.
+                const pxPerSec = totalDuration > 0 ? innerW / totalDuration : 5;
+                let startTime = Math.max(0, relX / pxPerSec);
+                const items = media.multi ?? [media];
+                const totalDur = items.reduce((s, it) => s + it.duration, 0);
+                const trackIdx = nearestVideoTrack(e.clientY);
+                // Snap magnétique — anchore le bord gauche du 1er clip ou droit du
+                // dernier sur les edges des autres clips + playhead + markers + t=0.
+                let snappedTime: number | null = null;
+                if (snapEnabled && !e.altKey && totalDuration > 0) {
                   const candidates: number[] = [globalTime, 0, ...markers.map(m => m.time)];
-                  for (const c of tlClips) {
-                    candidates.push(c.start);
-                    candidates.push(c.start + c.duration);
-                  }
-                  for (let gt = 5; gt < totalDuration; gt += 5) candidates.push(gt);
+                  for (const c of tlClips) { candidates.push(c.start); candidates.push(c.start + c.duration); }
                   const leftPx = startTime * pxPerSec;
-                  const rightPx = (startTime + media.duration) * pxPerSec;
+                  const rightPx = (startTime + totalDur) * pxPerSec;
                   let best = SNAP_TOLERANCE_PX + 0.001;
                   for (const cand of candidates) {
                     const candPx = cand * pxPerSec;
                     const dL = Math.abs(candPx - leftPx);
-                    if (dL < best) { best = dL; startTime = cand; snapPct = (cand / totalDuration) * 100; }
+                    if (dL < best) { best = dL; startTime = cand; snappedTime = cand; }
                     const dR = Math.abs(candPx - rightPx);
-                    if (dR < best) { best = dR; startTime = Math.max(0, cand - media.duration); snapPct = (cand / totalDuration) * 100; }
+                    if (dR < best) { best = dR; startTime = Math.max(0, cand - totalDur); snappedTime = cand; }
                   }
                 }
-                const leftPct = (startTime / totalDuration) * 100;
-                const widthPct = Math.min(100 - leftPct, (media.duration / totalDuration) * 100);
-                const trackIdx = nearestVideoTrack(e.clientY);
-                setDropPreview({ leftPct, widthPct, trackIdx, name: media.name, stripUrl: media.stripUrl, snapPct });
+                // Collision-fallback : miroir de dropMediaBatch — si la plage totale
+                // colide sur la piste cible, on décale au tail de cette piste.
+                const rowClips = tlClips.filter((c) => (c.videoTrackIndex ?? 0) === trackIdx);
+                const rangeCollides = rowClips.some((c) => startTime + totalDur > c.start && c.start + c.duration > startTime);
+                if (rangeCollides) {
+                  startTime = rowClips.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
+                  snappedTime = null;
+                }
+                let cursor = startTime;
+                const previewItems = items.map((it) => {
+                  const leftPx = cursor * pxPerSec;
+                  const widthPx = Math.max(2, it.duration * pxPerSec);
+                  cursor += it.duration;
+                  return { leftPx, widthPx, name: it.name, stripUrl: it.stripUrl, hasAudio: it.hasAudio };
+                });
+                const lastRight = previewItems.length ? previewItems[previewItems.length - 1].leftPx + previewItems[previewItems.length - 1].widthPx : 0;
+                const extraPadPx = Math.max(0, Math.ceil(lastRight - innerW + 40));
+                const snapPx = snappedTime != null ? snappedTime * pxPerSec : null;
+                mediaDropResolvedRef.current = { startTime, trackIdx };
+                setDropPreview({ trackIdx, snapPx, extraPadPx, items: previewItems });
+                // Auto-scroll pour révéler la fin du preview si nécessaire
+                if (extraPadPx > 0 && lastRight > scrollLeft + container.clientWidth - 40) {
+                  container.scrollLeft = Math.max(0, lastRight - container.clientWidth + 40);
+                }
               }
             }
           }}
@@ -4150,6 +5353,24 @@ export default function Editor() {
               smartDrop({ tlId, intendedVideoTrack, dropTime });
               e.preventDefault();
               return;
+            }
+            const sceneJson = e.dataTransfer.getData("application/x-cinassist-scene");
+            if (sceneJson) {
+              try {
+                const s = JSON.parse(sceneJson) as { clip_id: string; media_start: number; duration: number; szenen_nr: number };
+                if (s.clip_id && typeof s.media_start === "number") {
+                  dropSceneAt({ clipId: s.clip_id, mediaStart: s.media_start, duration: s.duration, szenen_nr: s.szenen_nr, intendedVideoTrack, dropTime });
+                  e.preventDefault();
+                  return;
+                }
+              } catch { /* fall through */ }
+            }
+            const multiJson = e.dataTransfer.getData("application/x-cinassist-media-multi");
+            if (multiJson) {
+              try {
+                const ids = JSON.parse(multiJson) as string[];
+                if (Array.isArray(ids) && ids.length > 0) { dropMediaBatch(ids, intendedVideoTrack, dropTime); e.preventDefault(); return; }
+              } catch { /* fall through */ }
             }
             const clipId = e.dataTransfer.getData("application/x-cinassist-media") || e.dataTransfer.getData("text/plain");
             if (clipId) {
@@ -4226,7 +5447,7 @@ export default function Editor() {
             window.addEventListener("mousemove", onMove);
             window.addEventListener("mouseup", onUp);
           }}
-          style={{ position: "relative", width: timelineInnerWidth, minHeight: "100%" }}>
+          style={{ position: "relative", width: timelineInnerWidth, minHeight: "100%", paddingRight: dropPreview?.extraPadPx ? `${dropPreview.extraPadPx}px` : undefined, boxSizing: "content-box" }}>
           {/* Ruler avec ticks minor + labels majors — scrubable + sticky top
               (reste visible pendant le scroll vertical de la timeline). */}
           <div
@@ -4400,7 +5621,7 @@ export default function Editor() {
               className="cin-track-row"
               onDragOver={(e) => {
                 // NO setState here (fires ~60 fps). Directional hint via ref+classList only.
-                if (e.dataTransfer.types.includes("application/x-cinassist-media") || e.dataTransfer.types.includes("application/x-cinassist-tl")) {
+                if (e.dataTransfer.types.includes("application/x-cinassist-media") || e.dataTransfer.types.includes("application/x-cinassist-tl") || e.dataTransfer.types.includes("application/x-cinassist-scene")) {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = e.dataTransfer.types.includes("application/x-cinassist-tl") ? "move" : "copy";
                   const r = e.currentTarget.getBoundingClientRect();
@@ -4419,6 +5640,20 @@ export default function Editor() {
                 const dropTime = r.width > 0 ? Math.max(0, ((e.clientX - r.left) / r.width) * totalDuration) : 0;
                 const tlId = e.dataTransfer.getData("application/x-cinassist-tl");
                 if (tlId) { smartDrop({ tlId, intendedVideoTrack: ti, dropTime }); return; }
+                const sceneJson = e.dataTransfer.getData("application/x-cinassist-scene");
+                if (sceneJson) {
+                  try {
+                    const s = JSON.parse(sceneJson) as { clip_id: string; media_start: number; duration: number; szenen_nr: number };
+                    if (s.clip_id && typeof s.media_start === "number") { dropSceneAt({ clipId: s.clip_id, mediaStart: s.media_start, duration: s.duration, szenen_nr: s.szenen_nr, intendedVideoTrack: ti, dropTime }); return; }
+                  } catch { /* fall through */ }
+                }
+                const multiJson = e.dataTransfer.getData("application/x-cinassist-media-multi");
+                if (multiJson) {
+                  try {
+                    const ids = JSON.parse(multiJson) as string[];
+                    if (Array.isArray(ids) && ids.length > 0) { dropMediaBatch(ids, ti, dropTime); return; }
+                  } catch { /* fall through */ }
+                }
                 const clipId = e.dataTransfer.getData("application/x-cinassist-media") || e.dataTransfer.getData("text/plain");
                 if (clipId) smartDrop({ media: clipId, intendedVideoTrack: ti, dropTime, insertNew: above ? "above" : "below" });
               }}
@@ -4431,10 +5666,10 @@ export default function Editor() {
               return (
                 <div key={c.tlId}
                   data-avtlid={c.tlId} data-avrow="v"
-                  onClick={(e) => clickTlClip(c.tlId, e, c.start)}
+                  onClick={(e) => clickTlClip(c.tlId, e, c.start, "v")}
                   onContextMenu={(e) => openClipMenu(e, c)}
                   onMouseDown={(e) => beginClipDrag(e, c, "v")}
-                  style={{ position: "absolute", left: `${clipToPct(c.start)}%`, width: `${clipWidthPct(c.duration)}%`, height: vH, borderRadius: 7, overflow: "hidden", background: sel ? "#0d1f3a" : "#232326", boxShadow: sel ? "0 0 0 2px #e5c100" : "none", cursor: locked ? "not-allowed" : "grab", opacity: tHidden ? 0.3 : 1, filter: tHidden ? "grayscale(1)" : "none" }}>
+                  style={{ position: "absolute", left: `${clipToPct(c.start)}%`, width: `${clipWidthPct(c.duration)}%`, height: vH, borderRadius: 7, overflow: "hidden", background: sel ? "#0d1f3a" : "#232326", boxShadow: (sel && (selectedAvSide[c.tlId] !== "a")) ? "0 0 0 2px #e5c100" : "none", cursor: locked ? "not-allowed" : "grab", opacity: tHidden ? 0.3 : 1, filter: tHidden ? "grayscale(1)" : "none" }}>
                   <div style={{ display: "flex", height: "100%" }}>
                     <div style={{ width: 42, background: c.stripUrl ? `url(${c.stripUrl}) center/cover no-repeat` : "linear-gradient(#7fa0b8,#3a5240)", flex: "none" }} />
                     {c.name && (
@@ -4524,7 +5759,7 @@ export default function Editor() {
             <div key={`arow${ti}`}
               ref={(el) => { if (el) audioRowRefs.current.set(ti, el); else audioRowRefs.current.delete(ti); }}
               onDragOver={(e) => {
-                if (e.dataTransfer.types.includes("application/x-cinassist-media") || e.dataTransfer.types.includes("application/x-cinassist-tl")) {
+                if (e.dataTransfer.types.includes("application/x-cinassist-media") || e.dataTransfer.types.includes("application/x-cinassist-tl") || e.dataTransfer.types.includes("application/x-cinassist-scene")) {
                   e.preventDefault();
                   e.dataTransfer.dropEffect = e.dataTransfer.types.includes("application/x-cinassist-tl") ? "move" : "copy";
                 }
@@ -4538,6 +5773,20 @@ export default function Editor() {
                 const dropTime = r.width > 0 ? Math.max(0, ((e.clientX - r.left) / r.width) * totalDuration) : 0;
                 const tlId = e.dataTransfer.getData("application/x-cinassist-tl");
                 if (tlId) { smartDrop({ tlId, intendedVideoTrack: ti, dropTime }); return; }
+                const sceneJson = e.dataTransfer.getData("application/x-cinassist-scene");
+                if (sceneJson) {
+                  try {
+                    const s = JSON.parse(sceneJson) as { clip_id: string; media_start: number; duration: number; szenen_nr: number };
+                    if (s.clip_id && typeof s.media_start === "number") { dropSceneAt({ clipId: s.clip_id, mediaStart: s.media_start, duration: s.duration, szenen_nr: s.szenen_nr, intendedVideoTrack: ti, dropTime }); return; }
+                  } catch { /* fall through */ }
+                }
+                const multiJson = e.dataTransfer.getData("application/x-cinassist-media-multi");
+                if (multiJson) {
+                  try {
+                    const ids = JSON.parse(multiJson) as string[];
+                    if (Array.isArray(ids) && ids.length > 0) { dropMediaBatch(ids, ti, dropTime); return; }
+                  } catch { /* fall through */ }
+                }
                 const clipId = e.dataTransfer.getData("application/x-cinassist-media") || e.dataTransfer.getData("text/plain");
                 if (clipId) smartDrop({ media: clipId, intendedVideoTrack: ti, dropTime });
               }}
@@ -4548,10 +5797,10 @@ export default function Editor() {
               return (
                 <div key={`a-${c.tlId}`}
                   data-avtlid={c.tlId} data-avrow="a"
-                  onClick={(e) => clickTlClip(c.tlId, e, c.start)}
+                  onClick={(e) => clickTlClip(c.tlId, e, c.start, "a")}
                   onContextMenu={(e) => openClipMenu(e, c)}
                   onMouseDown={(e) => beginClipDrag(e, c, "a")}
-                  style={{ position: "absolute", left: `${clipToPct(audioStartOf(c))}%`, width: `${clipWidthPct(c.duration)}%`, height: aH, borderRadius: 7, overflow: "hidden", background: "#1f6b5f", boxShadow: sel ? "0 0 0 2px #e5c100" : "none", cursor: locked ? "not-allowed" : "grab", opacity: aSt.mute ? 0.45 : 1 }}>
+                  style={{ position: "absolute", left: `${clipToPct(audioStartOf(c))}%`, width: `${clipWidthPct(c.duration)}%`, height: aH, borderRadius: 7, overflow: "hidden", background: "#1f6b5f", boxShadow: (sel && (selectedAvSide[c.tlId] !== "v")) ? "0 0 0 2px #e5c100" : "none", cursor: locked ? "not-allowed" : "grab", opacity: aSt.mute ? 0.45 : 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 6px 0", fontSize: 10, color: "#cdeee7" }}>
                     <span style={{ flex: "none", display: "inline-flex" }} title={c.avLinked === false ? "Audio getrennt (unabhängig verschiebbar)" : "Audio mit Video verknüpft"}>
                       {c.avLinked === false ? <BrokenChainIcon /> : <ChainIcon />}
@@ -4717,6 +5966,57 @@ export default function Editor() {
           })}
           {/* Ghost overlay pour splits proposés — lignes verticales qui traversent toutes les rows. */}
           <ProposalSplitsLayer totalDuration={totalDuration} />
+          {/* Badges résumé au-dessus du 1er ghost de chaque proposal pending */}
+          <ProposalSummaryBadges totalDuration={totalDuration} />
+
+          {/* KI-Suche match ghosts — bandes violettes sur la timeline aux
+              positions des scènes retournées par la recherche courante, quand
+              le clip est déjà placé sur la timeline. Rendu prioritaire mais
+              non-interactif (pointerEvents: none). */}
+          {searchResults.length > 0 && totalDuration > 0 && (() => {
+            type Match = { tlId: string; leftPct: number; widthPct: number; simPct: number; sceneNr: number; clipName: string };
+            const matches: Match[] = [];
+            for (const r of filteredSearchResults) {
+              const tl = tlClips.find((c) => c.name === r.clip_name.replace(/\.[^/.]+$/, "") || c.clipId === r.clip_id);
+              if (!tl) continue;
+              // Traduit media_start → timeline time (mediaStart peut être ≠ 0 si le clip a été trimmé)
+              const tlOffset = tl.start - tl.mediaStart;
+              const from = Math.max(tl.start, r.start_zeit + tlOffset);
+              const to = Math.min(tl.start + tl.duration, r.end_zeit + tlOffset);
+              if (to - from < 0.05) continue;
+              matches.push({
+                tlId: tl.tlId,
+                leftPct: (from / totalDuration) * 100,
+                widthPct: ((to - from) / totalDuration) * 100,
+                simPct: Math.round(r.similarity * 100),
+                sceneNr: r.szenen_nr,
+                clipName: r.clip_name,
+              });
+            }
+            if (matches.length === 0) return null;
+            return (
+              <>
+                {matches.map((m, i) => (
+                  <div
+                    key={`ki-match-${i}`}
+                    title={`KI-Suche: ${m.clipName} · Szene ${m.sceneNr} · ${m.simPct}% Übereinstimmung`}
+                    style={{
+                      position: "absolute",
+                      left: `${m.leftPct}%`,
+                      width: `${Math.max(0, m.widthPct)}%`,
+                      top: 20,
+                      height: 6,
+                      background: "linear-gradient(90deg, rgba(201,164,255,0.85), rgba(122,164,212,0.85))",
+                      borderRadius: 3,
+                      boxShadow: "0 0 6px rgba(201,164,255,0.6)",
+                      pointerEvents: "none",
+                      zIndex: 11,
+                    }}
+                  />
+                ))}
+              </>
+            );
+          })()}
 
           {/* Drop-Preview (DaVinci-style) : ghost du clip pendant le drag depuis
               Medien, positionné sur la row cible avec la bonne largeur. Affiche
@@ -4728,34 +6028,62 @@ export default function Editor() {
             const rowRect = targetRow.getBoundingClientRect();
             const containerRect = container.getBoundingClientRect();
             const topPx = rowRect.top - containerRect.top;
+            // Row audio correspondante (même index) — pour les ghosts audio.
+            const aIdx = Math.min(dropPreview.trackIdx, numAudioTracks - 1);
+            const aRow = aIdx >= 0 ? audioRowRefs.current.get(aIdx) : null;
+            const aTopPx = aRow ? aRow.getBoundingClientRect().top - containerRect.top : null;
+            const aHeight = aRow ? aRow.getBoundingClientRect().height : 0;
+            const isMulti = dropPreview.items.length > 1;
             return (
               <>
-                <div style={{
-                  position: "absolute", left: `${dropPreview.leftPct}%`, width: `${dropPreview.widthPct}%`,
-                  top: topPx, height: rowRect.height, pointerEvents: "none", zIndex: 14,
-                  borderRadius: 7, border: "2px solid #e5c100",
-                  background: dropPreview.stripUrl
-                    ? `url(${dropPreview.stripUrl}) center/cover no-repeat`
-                    : "rgba(229,193,0,0.12)",
-                  boxShadow: "0 0 12px rgba(229,193,0,0.6), inset 0 0 0 1px rgba(0,0,0,0.4)",
-                  overflow: "hidden",
-                }}>
-                  {/* Overlay sombre + label pour lisibilité du nom */}
-                  <div style={{
-                    position: "absolute", inset: 0,
-                    background: "linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.2) 40%,rgba(0,0,0,0.55))",
-                    display: "flex", alignItems: "center", padding: "0 8px",
-                    fontSize: 11, color: "#fff", fontWeight: 600,
-                    textShadow: "0 1px 2px rgba(0,0,0,0.8)",
-                    whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                {dropPreview.items.map((it, i) => (
+                  <div key={i} style={{
+                    position: "absolute", left: `${it.leftPx}px`, width: `${it.widthPx}px`,
+                    top: topPx, height: rowRect.height, pointerEvents: "none", zIndex: 14,
+                    borderRadius: 7, border: "2px solid #e5c100",
+                    background: it.stripUrl
+                      ? `url(${it.stripUrl}) center/cover no-repeat`
+                      : "rgba(229,193,0,0.12)",
+                    boxShadow: "0 0 12px rgba(229,193,0,0.6), inset 0 0 0 1px rgba(0,0,0,0.4)",
+                    overflow: "hidden",
                   }}>
-                    {dropPreview.name}
+                    <div style={{
+                      position: "absolute", inset: 0,
+                      background: "linear-gradient(rgba(0,0,0,0.55),rgba(0,0,0,0.2) 40%,rgba(0,0,0,0.55))",
+                      display: "flex", alignItems: "center", padding: "0 8px",
+                      fontSize: 11, color: "#fff", fontWeight: 600,
+                      textShadow: "0 1px 2px rgba(0,0,0,0.8)",
+                      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    }}>
+                      {it.name}
+                    </div>
                   </div>
-                </div>
-                {/* Ligne verticale snap si magnet actif */}
-                {dropPreview.snapPct != null && (
+                ))}
+                {/* Ghosts audio sur la row A correspondante (si le clip a de l'audio) */}
+                {aTopPx != null && dropPreview.items.map((it, i) => it.hasAudio ? (
+                  <div key={`a${i}`} style={{
+                    position: "absolute", left: `${it.leftPx}px`, width: `${it.widthPx}px`,
+                    top: aTopPx, height: aHeight, pointerEvents: "none", zIndex: 14,
+                    borderRadius: 7, border: "2px solid #7fd4c4",
+                    background: "rgba(127,212,196,0.18)",
+                    boxShadow: "0 0 10px rgba(127,212,196,0.5)",
+                    overflow: "hidden",
+                  }} /> ) : null)}
+                {isMulti && (
                   <div style={{
-                    position: "absolute", left: `${dropPreview.snapPct}%`, top: 0, bottom: 0,
+                    position: "absolute", left: `${dropPreview.items[0].leftPx}px`,
+                    top: topPx - 20, height: 18, pointerEvents: "none", zIndex: 15,
+                    padding: "0 6px", borderRadius: 4, background: "#e5c100",
+                    color: "#1a1a1c", fontSize: 10, fontWeight: 700,
+                    display: "flex", alignItems: "center",
+                    boxShadow: "0 2px 6px rgba(0,0,0,0.5)",
+                  }}>
+                    {dropPreview.items.length} Clips
+                  </div>
+                )}
+                {dropPreview.snapPx != null && (
+                  <div style={{
+                    position: "absolute", left: `${dropPreview.snapPx}px`, top: 0, bottom: 0,
                     width: 1, marginLeft: -0.5,
                     background: "rgba(255,255,255,0.95)",
                     boxShadow: "0 0 6px rgba(255,255,255,0.9)",
@@ -5090,6 +6418,224 @@ export default function Editor() {
         </div>
       )}
 
+      {/* ─── Comparison Mode Modal ─── */}
+      {compareState.open && (() => {
+        const takeTake = (sceneId: string) => {
+          const sc = compareState.scenes.find((s) => s.scene_id === sceneId);
+          if (!sc) return;
+          dropSceneAt({ clipId: sc.clip_id, mediaStart: sc.start_zeit, duration: sc.dauer, szenen_nr: sc.szenen_nr, intendedVideoTrack: 0, dropTime: totalDuration });
+          setCompareState({ open: false, loading: false, scenes: [], verdict: null, meta: null });
+          setCompareBasket([]);
+        };
+        const n = compareState.scenes.length || compareBasket.length;
+        // Grid columns : 2 → 2 cols, 3 → 3 cols, 4 → 2×2. On garde une largeur
+        // raisonnable pour tenir sur écran laptop (max 1400).
+        const cols = n <= 2 ? 2 : n === 3 ? 3 : 2;
+        const modalWidth = Math.min(1400, 340 * cols + 40);
+        return (
+          <div
+            onClick={() => setCompareState({ open: false, loading: false, scenes: [], verdict: null, meta: null })}
+            onKeyDown={(e) => { if (e.key === "Escape") setCompareState({ open: false, loading: false, scenes: [], verdict: null, meta: null }); }}
+            tabIndex={-1}
+            ref={(el) => { if (el) el.focus(); }}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(2px)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", outline: "none", padding: 20 }}
+          >
+            <div onClick={(e) => e.stopPropagation()} style={{ width: modalWidth, maxWidth: "100%", maxHeight: "90vh", background: "#161617", borderRadius: 14, border: "1px solid #232326", boxShadow: "0 20px 60px rgba(0,0,0,.75)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              {/* Header */}
+              <div style={{ padding: "14px 20px 12px", display: "flex", alignItems: "center", gap: 10, borderBottom: "1px solid #232326" }}>
+                <svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke="#4a7fc0" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#f0f0f0" }}>Takes vergleichen</div>
+                  <div style={{ fontSize: 11, color: "#7a8a9a", marginTop: 2 }}>
+                    {compareState.loading ? "KI analysiert die Takes… (llama3, ~10s)"
+                      : compareState.error ? <span style={{ color: "#e07a7a" }}>Fehler: {compareState.error}</span>
+                      : compareState.verdict ? <span>KI-Verdikt in {compareState.meta?.wall_s ?? "?"}s</span>
+                      : `${n} Takes ausgewählt`}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCompareState({ open: false, loading: false, scenes: [], verdict: null, meta: null })}
+                  title="Schließen"
+                  style={{ background: "transparent", border: "none", color: "#8a8a8a", cursor: "pointer", padding: 4, display: "flex" }}
+                >
+                  <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+                </button>
+              </div>
+              {/* Verdict IA en tête */}
+              {compareState.verdict && !compareState.loading && (
+                <div style={{ padding: "10px 20px", background: "rgba(74,127,192,0.08)", borderBottom: "1px solid #232326", display: "flex", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ flex: "none", marginTop: 2 }}>
+                    <svg width={16} height={16} viewBox="0 0 24 24" fill="none" stroke="#7fa4d4" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+                  </div>
+                  <div style={{ flex: 1, fontSize: 12, color: "#c4d4e8", lineHeight: 1.45 }}>
+                    <strong style={{ color: "#7fa4d4" }}>KI-Verdikt: </strong>
+                    {compareState.verdict.reasoning}
+                  </div>
+                </div>
+              )}
+              {/* Loading state */}
+              {compareState.loading && (
+                <div style={{ padding: 40, display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                  <svg width={32} height={32} viewBox="0 0 24 24" fill="none" stroke="#4a7fc0" strokeWidth={2.5} strokeLinecap="round" strokeDasharray="14 42" style={{ animation: "spin 0.9s linear infinite" }}><circle cx="12" cy="12" r="9" /></svg>
+                  <div style={{ fontSize: 12, color: "#7a8a9a" }}>llama3 vergleicht die Takes…</div>
+                </div>
+              )}
+              {/* Grid des scènes */}
+              {!compareState.loading && compareState.scenes.length > 0 && (
+                <div style={{ padding: 20, overflowY: "auto", flex: 1, display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 14 }}>
+                  {compareState.scenes.map((sc) => {
+                    const isBest = compareState.verdict?.best_scene_id === sc.scene_id;
+                    const rank = compareState.verdict?.per_scene?.[sc.scene_id]?.rank;
+                    const note = compareState.verdict?.per_scene?.[sc.scene_id]?.note;
+                    const proxySrc = sc.clip_proxy_url ? abs(sc.clip_proxy_url) || undefined : undefined;
+                    return (
+                      <div key={sc.scene_id} style={{ display: "flex", flexDirection: "column", gap: 8, padding: 10, background: "#0f0f10", borderRadius: 10, border: isBest ? "2px solid #6ad04a" : "1px solid #232326", boxShadow: isBest ? "0 0 16px rgba(106,208,74,0.25)" : "none" }}>
+                        {/* Header colonne : rank + framing + best badge */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+                          {rank && (
+                            <span style={{ padding: "2px 6px", borderRadius: 4, background: isBest ? "#6ad04a" : "#2a2a2c", color: isBest ? "#0a1a05" : "#c4c4c4", fontWeight: 700, fontFamily: "ui-monospace, monospace" }}>#{rank}</span>
+                          )}
+                          {isBest && (
+                            <span style={{ display: "flex", alignItems: "center", gap: 4, color: "#6ad04a", fontWeight: 700 }}>
+                              <svg width={11} height={11} viewBox="0 0 24 24" fill="#6ad04a"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
+                              Empfohlen
+                            </span>
+                          )}
+                          <span style={{ marginLeft: "auto", color: "#8a8a8a", fontFamily: "ui-monospace, monospace", fontSize: 10 }}>{sc.framing || "?"} · {sc.dauer.toFixed(1)}s</span>
+                        </div>
+                        {/* Video player en loop sur la scène */}
+                        <video
+                          ref={(el) => {
+                            if (!el) return;
+                            const doSeek = () => { try { el.currentTime = sc.start_zeit; } catch { /* trop tôt */ } };
+                            if (el.readyState >= 1) doSeek(); else el.addEventListener("loadedmetadata", doSeek, { once: true });
+                          }}
+                          src={proxySrc}
+                          muted
+                          autoPlay
+                          playsInline
+                          preload="auto"
+                          controls
+                          onTimeUpdate={(e) => {
+                            const v = e.currentTarget;
+                            if (v.currentTime >= sc.end_zeit - 0.05) { try { v.currentTime = sc.start_zeit; } catch { /* ignore */ } }
+                          }}
+                          style={{ width: "100%", aspectRatio: "16 / 9", objectFit: "cover", borderRadius: 6, background: "#000" }}
+                        />
+                        {/* Metadata */}
+                        <div style={{ fontSize: 11, color: "#c4c4c4" }}>
+                          <div style={{ fontWeight: 600 }}>{sc.clip_name} · Szene {sc.szenen_nr}</div>
+                          <div style={{ fontSize: 10, color: "#7a7a7a", fontFamily: "ui-monospace, monospace", marginTop: 1 }}>{sc.start_zeit.toFixed(1)}s → {sc.end_zeit.toFixed(1)}s{sc.speakers.length > 0 && ` · ${sc.speakers.join(", ")}`}</div>
+                        </div>
+                        {sc.transkription && (
+                          <div style={{ fontSize: 10.5, color: "#7fd4c4", fontStyle: "italic", lineHeight: 1.4, maxHeight: 60, overflow: "auto" }}>
+                            «{sc.transkription}»
+                          </div>
+                        )}
+                        {note && (
+                          <div style={{ marginTop: "auto", padding: "6px 8px", borderRadius: 5, background: isBest ? "rgba(106,208,74,0.08)" : "rgba(255,255,255,0.03)", borderLeft: `2px solid ${isBest ? "#6ad04a" : "#3a3a3e"}`, fontSize: 10.5, color: "#b4b4b4", lineHeight: 1.4 }}>
+                            {note}
+                          </div>
+                        )}
+                        <button
+                          onClick={() => takeTake(sc.scene_id)}
+                          style={{ padding: "6px 10px", borderRadius: 6, background: isBest ? "#6ad04a" : "#3a3a3e", color: isBest ? "#0a1a05" : "#e0e0e0", border: "none", fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5, justifyContent: "center" }}
+                        >
+                          <svg width={11} height={11} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+                          Auf Timeline
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ─── Löschen-Bestätigung Modal ─── */}
+      {deleteConfirm && (() => {
+        const SHOW_LIMIT = 6;
+        const visibleNames = deleteConfirm.names.slice(0, SHOW_LIMIT);
+        const overflowCount = Math.max(0, deleteConfirm.names.length - SHOW_LIMIT);
+        return (
+          <div
+            onClick={() => setDeleteConfirm(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { e.preventDefault(); setDeleteConfirm(null); }
+              if (e.key === "Enter") { e.preventDefault(); performDelete(); }
+            }}
+            tabIndex={-1}
+            ref={(el) => { if (el) el.focus(); }}
+            style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.65)", backdropFilter: "blur(2px)", zIndex: 400, display: "flex", alignItems: "center", justifyContent: "center", outline: "none" }}
+          >
+            <div onClick={(e) => e.stopPropagation()} style={{ width: 420, maxHeight: "80vh", background: "#161617", borderRadius: 14, border: "1px solid #232326", boxShadow: "0 20px 60px rgba(0,0,0,.75)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+              {/* En-tête avec icône trash rouge */}
+              <div style={{ padding: "18px 20px 14px", display: "flex", alignItems: "flex-start", gap: 12 }}>
+                <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(224,122,122,0.12)", display: "flex", alignItems: "center", justifyContent: "center", flex: "none" }}>
+                  <S w={18} c="#e07a7a" sw={2}><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></S>
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: "#f0f0f0", marginBottom: 3 }}>
+                    {deleteConfirm.ids.length === 1 ? "Clip löschen?" : `${deleteConfirm.ids.length} Clips löschen?`}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#8a8a8a" }}>
+                    Die Dateien werden vom Mac mini entfernt.
+                  </div>
+                </div>
+              </div>
+              {/* Liste des noms concernés */}
+              <div style={{ padding: "0 20px", overflowY: "auto", flex: 1 }}>
+                <div style={{ background: "#0f0f10", border: "1px solid #232326", borderRadius: 8, padding: "8px 4px", maxHeight: 200, overflowY: "auto" }}>
+                  {visibleNames.map((name, i) => (
+                    <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 10px", fontSize: 12, color: "#cfcfcf" }}>
+                      <FilmIcon c="#7a7a7a" />
+                      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
+                    </div>
+                  ))}
+                  {overflowCount > 0 && (
+                    <div style={{ padding: "5px 10px 3px", fontSize: 11, color: "#7a7a7a", fontStyle: "italic" }}>
+                      … und {overflowCount} weitere
+                    </div>
+                  )}
+                </div>
+                {/* Warning timeline */}
+                {deleteConfirm.usedInTLCount > 0 && (
+                  <div style={{ marginTop: 12, padding: "8px 10px", background: "rgba(224,178,80,0.10)", border: "1px solid rgba(224,178,80,0.30)", borderRadius: 8, display: "flex", alignItems: "flex-start", gap: 8 }}>
+                    <S w={14} c="#e0b250" sw={2}><path d="M12 9v4M12 17h.01" /><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /></S>
+                    <div style={{ flex: 1, fontSize: 11, color: "#e0b250", lineHeight: 1.4 }}>
+                      <strong style={{ fontWeight: 600 }}>{deleteConfirm.usedInTLCount}</strong> Clip{deleteConfirm.usedInTLCount > 1 ? "s werden" : " wird"} aktuell in der Timeline verwendet — {deleteConfirm.usedInTLCount > 1 ? "sie werden" : "er wird"} ebenfalls entfernt (Cmd-Z macht rückgängig).
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Actions */}
+              <div style={{ padding: "14px 20px 18px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  style={{ padding: "7px 14px", borderRadius: 7, background: "transparent", color: "#c4c4c4", border: "1px solid #2a2a2c", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "#1c1c1e"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  Abbrechen
+                </button>
+                <button
+                  onClick={performDelete}
+                  autoFocus
+                  style={{ padding: "7px 14px", borderRadius: 7, background: "#c04a4a", color: "#fff", border: "1px solid #d05a5a", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 5 }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "#d05656"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "#c04a4a"; }}
+                >
+                  <S w={12} c="#fff" sw={2.2}><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /></S>
+                  Löschen
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ─── Einstellungen Modal ─── */}
       {settingsOpen && (
         <div onClick={() => setSettingsOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -5197,6 +6743,12 @@ export default function Editor() {
 
       {/* KI-Schnittassistent — floating chat panel + FAB. */}
       <ChatPanel />
+
+      {/* Modal analyse d'un clip (Rechtsklick sur un Medien-Item). */}
+      {analysisClipId && (
+        <ClipAnalysisModal clipId={analysisClipId} onClose={() => setAnalysisClipId(null)} />
+      )}
+      </div>{/* fin inner responsive container */}
     </div>
   );
 }

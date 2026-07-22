@@ -15,6 +15,7 @@ export interface ClipDTO {
   dauer: number | null;
   aufloesung: string | null;
   bildrate: number | null;
+  codec: string | null;
   dateigroesse_mb: number | null;
   status: string;
   erstellt_am: string | null;
@@ -339,6 +340,40 @@ export async function exportTimeline(params: {
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || `Export fehlgeschlagen: ${res.status}`);
+  }
+  return res.json();
+}
+
+export type NleApp = "davinci" | "premiere" | "fcp" | "avid";
+
+export interface SendToAppResult {
+  status: "importiert" | "geöffnet" | "download";
+  app: string;
+  datei: string;
+  groesse_bytes: number;
+  nachricht: string;
+  download_url?: string;
+}
+
+export async function sendToApp(params: {
+  app: NleApp;
+  segments: ExportSegment[];
+  name?: string;
+  fps?: number;
+}): Promise<SendToAppResult> {
+  const res = await fetch(`/api/export/open-in`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      app: params.app,
+      segments: params.segments,
+      name: params.name ?? "CinAssist_Timeline",
+      fps: params.fps ?? 30.0,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Senden fehlgeschlagen: ${res.status}`);
   }
   return res.json();
 }

@@ -196,6 +196,34 @@ WHISPER_HALLUCINATIONS = {
     "soundtrack", "[geräusche]", "[noise]", "geräusche",
 }
 
+# Version SANS ponctuation — utilisée après normalisation par _ist_halluzination.
+# Ajouts fréquents : mots isolés courts, hallucinations Whisper connues.
+WHISPER_HALLUCINATIONS_CLEAN = {
+    # Danke variants
+    "danke", "danke schön", "vielen dank", "vielen dank fürs zuschauen",
+    # Thank you
+    "thank you", "thanks", "thanks for watching",
+    # Bracketed noise markers
+    "musik", "music", "musique", "applaus", "applause", "geräusche", "noise",
+    "soundtrack", "mahalo",
+    # Répétitions courtes
+    "musik musik", "musik musik musik", "music music", "music music music",
+    # Symboles musique
+    "♪", "♫", "♪♪",
+    # Subtitle credits
+    "untertitel der amara org community",
+    "untertitel von stephanie geiges",
+    "untertitelung des zdf",
+    "untertitelung im auftrag des zdf",
+    "untertitel im auftrag des zdf für funk 2017",
+    "untertitelung aufgrund der amara org community",
+    "sf produktion",
+    # Mots isolés ambigus (Whisper les produit sur du silence)
+    "ja", "nein", "okay", "ok", "so", "you", "yeah", "yes", "no",
+    "uh", "ah", "hm", "hmm", "mm", "um", "eh",
+    "amen", "goodbye", "farewell", "bye",
+}
+
 
 def _ist_repetierte_halluzination(text: str) -> bool:
     """
@@ -237,14 +265,18 @@ def _ist_audio_stille(audio_pfad: str, rms_schwelle: float = 0.005) -> bool:
 
 def _ist_halluzination(text: str) -> bool:
     """Prüft, ob das Segment einer bekannten Whisper-Stille-Halluzination entspricht."""
+    import re as _re
     norm = text.strip().lower()
     if len(norm) <= 2:
         return True
-    # Exakter Treffer in Halluzinations-Liste
+    # Normalise la ponctuation avant comparaison : "Danke!" == "danke." == "danke ?"
+    norm_clean = _re.sub(r"[.,!?;:…]+", "", norm).strip()
+    if norm_clean in WHISPER_HALLUCINATIONS_CLEAN:
+        return True
     if norm in WHISPER_HALLUCINATIONS:
         return True
     # Auch sehr kurze Sätze ohne Inhalt (z.B. nur Satzzeichen)
-    if len(norm.replace(".", "").replace(",", "").replace("!", "").replace("?", "").strip()) <= 2:
+    if len(norm_clean) <= 2:
         return True
     # Repetitive Token-Halluzination (z.B. "Musik Musik Musik")
     if _ist_repetierte_halluzination(text):
@@ -1198,12 +1230,16 @@ def ingestion_pipeline(self, clip_id: str, job_id: str) -> dict[str, Any]:
         _update_job(job_id, "laeuft", 97, "Ergebnisse werden gespeichert...", schritt="persistierung")
 
         for i, szene_data in enumerate(szenen):
-            # Passende Transkriptions-Segmente finden
+            # Passende Transkriptions-Segmente finden.
+            # BUGFIX 2026-07-19: on utilisait un test d'overlap qui attribuait
+            # UN MÊME segment Whisper à TOUTES les scènes qu'il traversait —
+            # cela dupliquait la transcription dans plusieurs scènes. On teste
+            # maintenant uniquement le START : un segment appartient à UNE
+            # seule scène = celle qui contient son start.
             seg_text = ""
             seg_json = []
             for seg in transkription.get("segmente", []):
-                if (seg["start"] < szene_data["end_zeit"] and
-                    seg["end"] > szene_data["start_zeit"]):
+                if szene_data["start_zeit"] <= seg["start"] < szene_data["end_zeit"]:
                     seg_text += seg["text"] + " "
                     seg_json.append(seg)
 

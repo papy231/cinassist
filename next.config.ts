@@ -2,6 +2,11 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   devIndicators: false,
+  // Uploads de vidéos jusqu'à 5 GB — même limite que le backend FastAPI. Sans ça,
+  // Next tronque à 10 MB par défaut et le proxy vers /api/clips/upload casse.
+  experimental: {
+    proxyClientMaxBodySize: "5gb" as unknown as number,
+  },
   // Next 15+ bloque les requêtes dev depuis d'autres hosts que localhost pour
   // éviter le DNS-rebinding. On whitelist explicitement le tailnet + éventuellement
   // d'autres URLs (funnel, IP locale, etc.).

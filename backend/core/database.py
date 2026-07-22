@@ -41,6 +41,11 @@ class Clip(Base):
     dateigroesse = Column(Integer, nullable=True)             # Bytes
     erstellt_am = Column(DateTime, default=datetime.utcnow)
     status = Column(String(20), default="hochgeladen")        # hochgeladen, analysiert, fehler
+    # Synthèse contextuelle générée par LLM à la demande (cache).
+    # Structure : {"thema": str, "narration": str, "visuell": str,
+    # "ambiance": str, "genre": str, "personen": [str, ...],
+    # "generated_at": iso8601, "model": str}
+    synthese_json = Column(JSON, nullable=True)
 
     szenen = relationship("Szene", back_populates="clip", cascade="all, delete-orphan")
     jobs = relationship("Job", back_populates="clip", cascade="all, delete-orphan")

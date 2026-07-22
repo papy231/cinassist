@@ -19,7 +19,11 @@ from backend.core.database import init_db
 from backend.api.clips import router as clips_router
 from backend.api.timelines import router as timelines_router
 from backend.api.ai import router as ai_router
-from backend.api.chat import router as chat_router
+# DEPRECATED : chat.py = ancien flow "guided cutting" (katalog + [VORSCHLAG:] tag),
+# remplacé par agent.py (ReAct + tools). Aucun call frontend depuis le refactor
+# streaming SSE — désactivé pour éviter les deux personas parallèles avec des
+# system prompts divergents. Fichier conservé pour référence Bachelorarbeit.
+# from backend.api.chat import router as chat_router
 from backend.api.websocket import router as ws_router
 from backend.api.export import router as export_router
 from backend.api.search import router as search_router
@@ -147,7 +151,7 @@ app.mount("/temp", StaticFiles(directory=str(TEMP_DIR)), name="temp")
 app.include_router(clips_router)
 app.include_router(timelines_router)
 app.include_router(ai_router)
-app.include_router(chat_router)
+# app.include_router(chat_router)  # désactivé — voir note d'import
 app.include_router(ws_router)
 app.include_router(export_router)
 app.include_router(search_router)

@@ -10,7 +10,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -96,11 +97,14 @@ async def export_timeline(req: ExportRequest, db: AsyncSession = Depends(get_db)
 # Final Cut Pro nutzt es nativ.
 
 class SendToAppRequest(BaseModel):
-    app: Literal["davinci", "premiere", "fcp"] = Field(
-        ..., description="Ziel-NLE: davinci / premiere / fcp"
+    app: Literal["davinci", "premiere", "fcp", "avid"] = Field(
+        ..., description="Ziel-NLE: davinci / premiere / fcp / avid"
     )
-    fcpxml: str = Field(..., description="FCPXML-Inhalt (vom Frontend gebaut)")
+    segments: list[SegmentExport] = Field(
+        ..., description="Timeline-Segmente (wie beim /api/export-Endpoint)"
+    )
     name: str = Field("CinAssist_Timeline", description="Datei-Basisname")
+    fps: float = Field(30.0, description="Framerate für den OTIO-Zeitbezug")
 
 
 # Mapping von App-Slug → macOS-Bundle-Namen (für `open -a`)
@@ -109,6 +113,17 @@ APP_BUNDLE_NAMES: dict[str, list[str]] = {
     "davinci":  ["DaVinci Resolve", "DaVinci Resolve Studio"],
     "premiere": ["Adobe Premiere Pro 2024", "Adobe Premiere Pro 2025", "Adobe Premiere Pro 2023", "Adobe Premiere Pro"],
     "fcp":      ["Final Cut Pro"],
+    "avid":     ["Media Composer", "Avid Media Composer"],
+}
+
+# Format d'échange pour chaque NLE.
+# DaVinci/Premiere/FCP → FCPXML (natif ou via adapter).
+# AVID Media Composer → EDL (CMX3600 — cuts-only mais universel).
+APP_FORMAT: dict[str, Literal["fcpxml", "edl"]] = {
+    "davinci":  "fcpxml",
+    "premiere": "fcpxml",
+    "fcp":      "fcpxml",
+    "avid":     "edl",
 }
 
 
@@ -169,6 +184,29 @@ def _versuche_open(app_slug: str, datei: Path) -> tuple[bool, str]:
     return True, installiert
 
 
+_LOCAL_HOSTNAMES = ("localhost", "127.0.0.1", "[::1]", "::1")
+
+
+def _client_ist_remote(request: Request) -> bool:
+    """
+    True wenn der Browser NICHT auf dem Backend-Host läuft — dann macht
+    Direct-Import / Finder-Reveal keinen Sinn (öffnet Resolve auf dem
+    falschen Rechner). Stattdessen liefern wir die FCPXML als Download.
+
+    Wir prüfen den Origin/Host-Header (nicht request.client.host), weil
+    Tailscale serve / Caddy loopback-Adresse zeigen selbst wenn der Browser
+    remote ist.
+    """
+    origin = (request.headers.get("origin") or "").lower()
+    if origin:
+        # origin = "https://mac-mini-openclaw.tailef3707.ts.net:3003"
+        # → hostname zwischen // und : / /
+        host = origin.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
+    else:
+        host = (request.headers.get("host") or "").split(":", 1)[0].lower()
+    return bool(host) and host not in _LOCAL_HOSTNAMES
+
+
 def _davinci_laeuft() -> bool:
     """Prüft, ob ein DaVinci-Resolve-Prozess aktiv ist."""
     try:
@@ -218,37 +256,104 @@ def _davinci_direkt_import(datei: Path, timeline_name: str) -> tuple[bool, str]:
         return False, f"Import-Fehler: {exc}"
 
 
-@router.post("/export/open-in")
-async def export_open_in(body: SendToAppRequest):
+@router.get("/export/download/{filename}")
+async def export_download(filename: str):
     """
-    Schreibt die FCPXML in ~/Documents/CinAssist_Exports/.
+    Sert die zuvor generierte FCPXML/EDL an den Browser (für Remote-Clients,
+    die die Datei lokal in ihre NLE ziehen wollen). Path-Traversal-safe:
+    resolved Pfad MUSS unter EXPORT_DIR liegen.
+    """
+    from backend.core.otio_export import EXPORT_DIR
+
+    ziel = (EXPORT_DIR / filename).resolve()
+    try:
+        ziel.relative_to(EXPORT_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "Ungültiger Dateiname")
+    if not ziel.is_file():
+        raise HTTPException(404, "Datei nicht gefunden")
+    return FileResponse(
+        path=str(ziel),
+        filename=ziel.name,
+        media_type="application/octet-stream",
+    )
+
+
+@router.post("/export/open-in")
+async def export_open_in(body: SendToAppRequest, request: Request):
+    """
+    Baut FCPXML (DaVinci/Premiere/FCP) oder EDL (AVID) aus den Timeline-Segmenten
+    und öffnet die Ziel-NLE direkt.
 
     Für DaVinci Resolve: versucht den DIREKTEN Timeline-Import via
     Scripting-API — die Timeline erscheint ohne manuellen Schritt. Schlägt
     das fehl (Scripting deaktiviert / Resolve nicht bereit), wird auf den
     Finder-Reveal-Modus zurückgefallen.
 
-    Für Premiere / Final Cut: App starten + Finder mit der Datei öffnen
+    Für Premiere / Final Cut / AVID: App starten + Finder mit der Datei öffnen
     (diese NLEs haben kein zuverlässiges Headless-Import-Interface).
     """
-    ziel_ordner = Path.home() / "Documents" / "CinAssist_Exports"
-    ziel_ordner.mkdir(parents=True, exist_ok=True)
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    safe_name = "".join(c for c in body.name if c.isalnum() or c in "_-") or "timeline"
-    datei = ziel_ordner / f"{safe_name}_{timestamp}.fcpxml"
-    datei.write_text(body.fcpxml, encoding="utf-8")
-    logger.info(f"FCPXML geschrieben: {datei}  ({len(body.fcpxml)} bytes)")
+    from backend.core.otio_export import export_to_file
+    from backend.workers.export import _resolve_clips
+
+    if not body.segments:
+        raise HTTPException(400, "Keine Segmente angegeben")
+    v_segs = [s for s in body.segments if s.track.startswith("v")]
+    if not v_segs:
+        raise HTTPException(400, "Keine Videosegmente in der Timeline")
+
+    # clip_id → absoluter Dateipfad (aus DB auflösen)
+    file_map = _resolve_clips([s.dict() for s in body.segments])
+    otio_segments: list[dict] = []
+    for s in v_segs:
+        fp = file_map.get(s.clip_id)
+        if not fp:
+            raise HTTPException(404, f"Clip nicht gefunden: {s.clip_id}")
+        otio_segments.append({
+            "clip_path": fp,
+            "clip_name": Path(fp).stem,
+            "media_start": s.mediaStart,
+            "duration": s.dauer,
+            "track": s.track.lower(),
+        })
+
+    fmt = APP_FORMAT[body.app]
+    try:
+        res = export_to_file(otio_segments, format=fmt, name=body.name, fps=body.fps)
+    except Exception as exc:
+        logger.exception(f"OTIO-Export fehlgeschlagen ({fmt}): {exc}")
+        raise HTTPException(500, f"{fmt.upper()}-Datei konnte nicht erzeugt werden: {exc}")
+
+    datei = Path(res["path"])
+    logger.info(f"{fmt.upper()} geschrieben: {datei}  ({res['size_bytes']} bytes)")
+
+    # ── Remote-Client: FCPXML als Download liefern ──
+    # Der Browser läuft nicht auf dem Backend-Host (z.B. MacBook greift
+    # auf Mac-mini-Backend zu). Direct-Import / `open -a` würde Resolve auf
+    # der falschen Maschine starten — stattdessen laden wir die Datei runter.
+    if _client_ist_remote(request):
+        return {
+            "status": "download",
+            "app": APP_BUNDLE_NAMES.get(body.app, [body.app])[0],
+            "datei": str(datei),
+            "download_url": f"/api/export/download/{datei.name}",
+            "groesse_bytes": res["size_bytes"],
+            "nachricht": (
+                f"{datei.name} wird heruntergeladen — ziehe die Datei in deiner "
+                f"lokalen NLE per Drag-and-Drop oder öffne sie mit File → Import → Timeline."
+            ),
+        }
 
     # ── DaVinci: Direktimport via Scripting-API versuchen ──
     if body.app == "davinci":
-        # Eindeutiger Timeline-Name (Zeitstempel) — verhindert Kollision
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
         ok, msg = _davinci_direkt_import(datei, f"CinAssist {timestamp}")
         if ok:
             return {
                 "status": "importiert",
                 "app": "DaVinci Resolve",
                 "datei": str(datei),
-                "groesse_bytes": len(body.fcpxml),
+                "groesse_bytes": res["size_bytes"],
                 "nachricht": msg,
             }
         # Fallback: Finder-Reveal — der User importiert manuell
@@ -262,7 +367,7 @@ async def export_open_in(body: SendToAppRequest):
             "status": "geöffnet",
             "app": "DaVinci Resolve",
             "datei": str(datei),
-            "groesse_bytes": len(body.fcpxml),
+            "groesse_bytes": res["size_bytes"],
             "nachricht": (
                 f"Direktimport nicht möglich ({msg}). DaVinci wurde gestartet und "
                 f"der Finder zeigt {datei.name} — ziehe die Datei in DaVinci oder "
@@ -270,12 +375,12 @@ async def export_open_in(body: SendToAppRequest):
             ),
         }
 
-    # ── Premiere / Final Cut: App + Finder ──
+    # ── Premiere / Final Cut / AVID: App + Finder ──
     ok, info = _versuche_open(body.app, datei)
     if not ok:
         raise HTTPException(
             502,
-            f"FCPXML wurde gespeichert ({datei.name}), aber {body.app} konnte nicht "
+            f"{fmt.upper()} wurde gespeichert ({datei.name}), aber {body.app} konnte nicht "
             f"gestartet werden: {info}. Du kannst die Datei manuell öffnen.",
         )
 
@@ -283,7 +388,7 @@ async def export_open_in(body: SendToAppRequest):
         "status": "geöffnet",
         "app": info,
         "datei": str(datei),
-        "groesse_bytes": len(body.fcpxml),
+        "groesse_bytes": res["size_bytes"],
         "nachricht": (
             f"{info} wurde gestartet und der Finder zeigt {datei.name}.  "
             f"Ziehe die Datei in die NLE oder verwende dort File → Import → Timeline."

@@ -175,32 +175,41 @@ export class VideoPool {
       if (v.readyState >= 1) doSeek();
       else v.addEventListener("loadedmetadata", doSeek, { once: true });
 
-      // "Ready" = full media buffered (so any seek is network-free). We check
-      // on every `progress` event and on `canplaythrough`, both of which fire
-      // as the browser downloads more of the file. `canplay` alone fires way
-      // too early — the user perceives lag on the first scrub after it.
+      // "Ready" logic. Trois voies (whichever fires first) :
+      //   A) `canplaythrough` — le browser garantit lecture sans pause.
+      //   B) full buffer (`end >= duration - 0.25s`) via `progress`.
+      //   C) timeout de sécurité (8s) si `readyState >= 2` (HAVE_CURRENT_DATA).
+      // Motivation : les browsers throttlent `preload=auto` sur les gros
+      // fichiers → le buffer plafonne et la voie B ne se déclenche jamais.
+      // `canplay` fire trop tôt (lag au 1er scrub), mais `canplaythrough` est
+      // le vrai signal "prêt" et évite le lag comme le "Lädt" éternel.
       let fired = false;
+      const emit = () => {
+        if (fired) return;
+        fired = true;
+        v!.removeEventListener("progress", onProgress);
+        v!.removeEventListener("canplaythrough", emit);
+        v!.removeEventListener("loadeddata", onProgress);
+        clearTimeout(timeoutId);
+        this.onSlotReady(src);
+      };
       const isFullyBuffered = () => {
         const el = v!;
         if (!el.duration || !isFinite(el.duration)) return false;
         if (el.buffered.length === 0) return false;
-        const end = el.buffered.end(el.buffered.length - 1);
-        return end >= el.duration - 0.25; // 250 ms tolerance
+        return el.buffered.end(el.buffered.length - 1) >= el.duration - 0.25;
       };
-      const emitReadyIfDone = () => {
-        if (fired) return;
-        if (!isFullyBuffered()) return;
-        fired = true;
-        v!.removeEventListener("progress", emitReadyIfDone);
-        v!.removeEventListener("canplaythrough", emitReadyIfDone);
-        v!.removeEventListener("loadeddata", emitReadyIfDone);
-        this.onSlotReady(src);
-      };
-      v.addEventListener("progress", emitReadyIfDone);
-      v.addEventListener("canplaythrough", emitReadyIfDone);
-      v.addEventListener("loadeddata", emitReadyIfDone);
-      // Also check once immediately in case data is already present (cache hit).
-      emitReadyIfDone();
+      const onProgress = () => { if (isFullyBuffered()) emit(); };
+      v.addEventListener("progress", onProgress);
+      v.addEventListener("canplaythrough", emit);
+      v.addEventListener("loadeddata", onProgress);
+      // Safety-net : après 8s, si le browser a au moins des données courantes,
+      // on considère le clip prêt (auto-preload throttlé par le navigateur).
+      const timeoutId = setTimeout(() => {
+        if (v!.readyState >= 2) emit();
+      }, 8000);
+      // Check immédiat (cache hit).
+      onProgress();
     }
     return v;
   }

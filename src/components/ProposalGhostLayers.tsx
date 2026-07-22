@@ -65,7 +65,7 @@ export function ProposalSplitsLayer({ totalDuration }: { totalDuration: number }
             borderRight: `2px dashed ${GHOST_COLOR}`,
             zIndex: 8,
             pointerEvents: "none",
-            boxShadow: "inset 0 0 8px rgba(229,193,0,0.35)",
+            animation: "cinProposalPulse 2.4s ease-in-out infinite",
           }}
         />
       ))}
@@ -150,12 +150,107 @@ export function ProposalDeletesInRow({
             borderRadius: 6,
             pointerEvents: "none",
             zIndex: 8,
-            boxShadow: "0 0 6px rgba(229,193,0,0.55)",
+            animation: "cinProposalPulse 2.4s ease-in-out infinite",
           }}
         />
       ))}
     </>
   );
+}
+
+/**
+ * Badge résumé flottant au-dessus du 1er ghost de chaque proposal pending —
+ * `47 Vorschläge · 12.3s` avec accept/reject à portée de clic. Placé dans le
+ * container timeline (position absolute), visible même si le user scrolle
+ * hors du chat panel.
+ */
+export function ProposalSummaryBadges({ totalDuration }: { totalDuration: number }) {
+  const proposals = useProposalStore((s) => s.proposals);
+  const acceptProposal = useProposalStore((s) => s.acceptProposal);
+  const rejectProposal = useProposalStore((s) => s.rejectProposal);
+  const pending = proposals.filter((p) => p.status === "pending");
+  if (pending.length === 0 || totalDuration <= 0) return null;
+
+  return (
+    <>
+      {pending.map((p) => {
+        // Trouve le 1er edit à position temporelle pour placer le badge.
+        let firstT: number | null = null;
+        let totalSec = 0;
+        let count = 0;
+        for (const e of p.edits) {
+          if (e.type === "deleteRange") {
+            if (firstT == null || e.from < firstT) firstT = e.from;
+            totalSec += Math.max(0, e.to - e.from);
+            count++;
+          } else if (e.type === "split") {
+            if (firstT == null || e.at < firstT) firstT = e.at;
+            count++;
+          } else if (e.type === "delete") {
+            count += e.tlIds.length;
+          }
+        }
+        if (firstT == null) firstT = 0;
+        const leftPct = Math.min(98, (firstT / totalDuration) * 100);
+        return (
+          <div
+            key={`badge-${p.id}`}
+            style={{
+              position: "absolute",
+              left: `${leftPct}%`,
+              top: 24, // sous la ruler, au-dessus des rows
+              transform: "translateX(-4px)",
+              zIndex: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "3px 8px",
+              borderRadius: 6,
+              background: "rgba(24,24,26,0.94)",
+              border: `1px solid ${GHOST_COLOR}`,
+              color: GHOST_COLOR,
+              fontSize: 10,
+              fontWeight: 700,
+              fontFamily: "ui-monospace, monospace",
+              boxShadow: "0 3px 12px rgba(0,0,0,0.6), 0 0 12px rgba(229,193,0,0.35)",
+              animation: "cinBadgeIn 0.25s ease-out",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={GHOST_COLOR} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L2 22h20L12 2zM12 9v4M12 17h.01" /></svg>
+            <span>{count} {count > 1 ? "Vorschläge" : "Vorschlag"}{totalSec > 0 ? ` · ${totalSec.toFixed(1)}s` : ""}</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); acceptProposal(p.id); }}
+              title="Annehmen (Cmd-Enter)"
+              style={{ background: GHOST_COLOR, color: "#1a1a1c", border: "none", borderRadius: 4, padding: "1px 6px", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", pointerEvents: "auto" }}
+            >
+              OK
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); rejectProposal(p.id); }}
+              title="Ablehnen"
+              style={{ background: "transparent", color: "#8a8a8a", border: "1px solid rgba(255,255,255,0.15)", borderRadius: 4, padding: "1px 5px", fontSize: 10, cursor: "pointer", fontFamily: "inherit", pointerEvents: "auto", display: "flex", alignItems: "center" }}
+            >
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
+            </button>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+// Retourne la position temporelle du 1er edit d'une proposal pending — utile
+// pour l'auto-scroll depuis Editor.
+export function getFirstPendingProposalTime(): { t: number; id: string } | null {
+  const pending = useProposalStore.getState().proposals.filter((p) => p.status === "pending");
+  for (const p of pending) {
+    for (const e of p.edits) {
+      if (e.type === "deleteRange") return { t: e.from, id: p.id };
+      if (e.type === "split") return { t: e.at, id: p.id };
+    }
+  }
+  return null;
 }
 
 // Discriminated helpers exposés pour tests futurs.

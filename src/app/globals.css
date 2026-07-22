@@ -10,3 +10,63 @@ a { color: #b9d94a; text-decoration: none; }
 a:hover { color: #cde86a; }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Pulse subtile pour les ghosts de proposals IA — attire l'œil sans agresser. */
+@keyframes cinProposalPulse {
+  0%, 100% { box-shadow: inset 0 0 8px rgba(229,193,0,0.35), 0 0 0 0 rgba(229,193,0,0); }
+  50%      { box-shadow: inset 0 0 8px rgba(229,193,0,0.55), 0 0 8px 2px rgba(229,193,0,0.35); }
+}
+@keyframes cinBadgeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Responsive (mobile / tablet portrait) ─────────────────────────
+   L'app CinAssist est desktop-first. Sur petit écran, on force des
+   ajustements globaux : touch targets 44px min, inputs sans zoom iOS,
+   scrollbars invisibles (natifs iOS scroll), tap-highlight retiré. */
+@media (max-width: 767px) {
+  html {
+    /* Empêche les zoom pinch involontaires sur les zones tap. */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    /* Sur iOS, un input avec font-size < 16px déclenche un zoom auto au focus. */
+    font-size: 16px;
+  }
+  /* Boutons/liens : touch target 44×44 recommandation iOS (approximatif via min-height). */
+  button, [role="button"], a[href] {
+    min-height: 40px;
+  }
+  /* Range/text inputs plus hauts, plus tapables. */
+  input[type="text"],
+  input[type="search"],
+  input[type="number"],
+  input[type="password"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+  /* Scrollbars invisibles sur mobile — iOS/Android ont leurs propres indicateurs. */
+  *::-webkit-scrollbar { width: 0; height: 0; }
+}
+
+/* Scrollbars fins et sobres, cohérents avec le thème sombre.
+   WebKit (Chrome/Safari) : 8px, transparent au repos, thumb visible au hover
+   du conteneur. Firefox : équivalent via scrollbar-width/color. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.10);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background 0.15s;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.28); background-clip: content-box; }
+*::-webkit-scrollbar-corner { background: transparent; }

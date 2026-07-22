@@ -26,6 +26,7 @@ EXPORT_DIR = Path.home() / "Documents" / "CinAssist_Exports"
 FORMATS: dict[str, tuple[str, str]] = {
     "fcpxml": (".fcpxml", "fcpx_xml"),
     "otio": (".otio", "otio_json"),
+    "edl": (".edl", "cmx_3600"),
 }
 
 
@@ -88,7 +89,7 @@ def _build_timeline(
 
 def export_to_file(
     segments: list[dict],
-    format: Literal["fcpxml", "otio"],
+    format: Literal["fcpxml", "otio", "edl"],
     name: str = "CinAssist_Timeline",
     fps: float = 30.0,
 ) -> dict:

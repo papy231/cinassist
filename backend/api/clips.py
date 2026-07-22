@@ -464,6 +464,166 @@ async def clip_pipeline_bericht(clip_id: str, db: AsyncSession = Depends(get_db)
     }
 
 
+# ─── Kontextuelle Synthese (LLM-basiert, cached) ─────────
+
+@router.get("/{clip_id}/synthese")
+async def clip_synthese(
+    clip_id: str,
+    refresh: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Génère (ou récupère depuis cache) une synthèse contextuelle du clip :
+    thème, narratif, style visuel, ambiance, genre, personnes présentes.
+
+    Passe `?refresh=true` pour forcer une régénération.
+    Sortie stockée dans `clips.synthese_json`.
+    """
+    import datetime as _dt
+    import httpx
+    import json as _json
+    from collections import Counter
+    from backend.core.config import OLLAMA_BASE_URL, OLLAMA_MODEL
+    from backend.core.database import Speaker
+
+    result = await db.execute(
+        select(Clip).where(Clip.id == clip_id).options(selectinload(Clip.szenen))
+    )
+    clip = result.scalar_one_or_none()
+    if not clip:
+        raise HTTPException(404, "Clip nicht gefunden.")
+
+    if clip.synthese_json and not refresh:
+        return {"clip_id": str(clip.id), "cached": True, "synthese": clip.synthese_json}
+
+    # Speakers réellement diarisés pour ce clip (source de vérité pour les personnes présentes).
+    speakers_result = await db.execute(select(Speaker).where(Speaker.clip_id == clip_id))
+    speakers = list(speakers_result.scalars().all())
+    speaker_labels = [sp.label_manual or sp.label_auto for sp in speakers]
+
+    szenen = sorted(clip.szenen, key=lambda s: s.szenen_nr)
+
+    # Récupère toutes les phrases (dédoublonnées) + les descriptions par scène
+    transkript_lines: list[str] = []
+    seg_seen: set[tuple[float, float]] = set()
+    beschreibungen: list[str] = []
+    framings: list[str] = []
+    for s in szenen:
+        if s.beschreibung:
+            beschreibungen.append(f"[{s.start_zeit:.1f}s] {s.beschreibung}")
+        if s.framing:
+            framings.append(s.framing)
+        raw = s.transkription_json or []
+        if isinstance(raw, list):
+            for seg in raw:
+                if not isinstance(seg, dict):
+                    continue
+                key = (round(float(seg.get("start", 0)), 3), round(float(seg.get("end", 0)), 3))
+                if key in seg_seen:
+                    continue
+                seg_seen.add(key)
+                text = str(seg.get("text", "")).strip()
+                if text:
+                    transkript_lines.append(f"[{seg.get('start', 0):.1f}s] {text}")
+
+    # Cap la taille pour rester dans le prompt LLM
+    transkript_text = "\n".join(transkript_lines)[:6000]
+    beschreibungen_text = "\n".join(beschreibungen)[:2500]
+    framing_summary = ", ".join(f"{k}: {v}" for k, v in Counter(framings).most_common())
+
+    speaker_block = (
+        f"{len(speakers)} identifiziert : {', '.join(speaker_labels)}"
+        if speakers else
+        "Keine Sprecher-Diarization verfügbar"
+    )
+
+    prompt = f"""Du bist ein FAKTUELLER Video-Analyst. Analysiere NUR was in den bereitgestellten Daten explicit vorkommt.
+
+🇩🇪 SPRACHREGEL — ABSOLUT VERBINDLICH :
+Der GESAMTE Output (thema, narration, visuell, ambiance, genre) MUSS AUF DEUTSCH sein,
+UNABHÄNGIG davon, in welcher Sprache die Transkription ist. Auch wenn die Transkription
+auf Englisch, Französisch oder einer anderen Sprache ist — deine JSON-Antwort ist AUSSCHLIESSLICH
+auf DEUTSCH. ÜBERSETZE die Aussagen ins Deutsche.
+Einzige Ausnahme : Eigennamen bleiben unverändert (z. B. "Edward Snowden", nicht "Eduard Schneemann").
+
+Antworte AUSSCHLIESSLICH als gültiges JSON mit dieser exakten Struktur, ohne Text außerhalb :
+
+{{
+  "thema": "Hauptthema in EINEM deutschen Satz.",
+  "narration": "Was passiert, in 3-5 SÄTZEN AUF DEUTSCH. Keine Spekulation.",
+  "visuell": "Visueller Stil AUF DEUTSCH : Farbpalette, Beleuchtung, Kadrage, Umgebung.",
+  "ambiance": "Stimmung AUF DEUTSCH (formell/informell, energisch/ruhig …).",
+  "genre": "Genre AUF DEUTSCH (Interview, Doku, Vlog, Kurzfilm, Musikvideo …).",
+  "anwesende_personen": ["Lesbare Namen der anwesenden Sprecher — leite sie aus dem Dialog ab wenn möglich."],
+  "erwaehnte_personen": ["Personen die im Dialog NAMENTLICH erwähnt werden, aber NICHT im Video sind"]
+}}
+
+⚠️ WICHTIGER UNTERSCHIED zwischen den zwei Personen-Feldern :
+- `anwesende_personen` = physisch im Clip präsent. Zahl = Anzahl der diarisierten Sprecher unten.
+  Für JEDEN SPEAKER_NN versuche einen lesbaren Namen aus dem Dialog abzuleiten :
+    * Wenn jemand angesprochen wird ("Mr. Snowden, ...") → dieser Sprecher heißt vermutlich so
+    * Wenn ein Sprecher fragt und ein anderer antwortet, ist der erste der "Interviewer"
+    * Beispiel : bei 2 Sprechern in einem Interview mit Edward Snowden →
+      ["Edward Snowden", "Interviewer"] (NIEMALS ["SPEAKER_00", "SPEAKER_01"])
+    * Wenn KEINE Zuordnung möglich → nutze "Sprecher 1", "Sprecher 2" (auf Deutsch)
+- `erwaehnte_personen` = im Dialog namentlich genannt aber NICHT anwesend (z.B. genannte Politiker).
+
+⚠️ STRENGE REGELN ZUR VERMEIDUNG VON HALLUZINATIONEN :
+- KEINE Personen erfinden, die nicht in Transkription oder Beschreibungen vorkommen.
+- KEINE Prominenten hinzufügen (z. B. „Obama", „Assange") NUR weil das Thema politisch klingt — sondern NUR wenn ihr Name tatsächlich in der Transkription vorkommt.
+- Die diarisierten Sprecher unten sind die ANWESENDEN Personen — nutze sie als einzige Quelle für `anwesende_personen`.
+- Wenn du nicht sicher bist, gib eine leere Liste `[]` zurück, statt zu erfinden.
+
+── Metadaten ──────────────────────────
+Dateiname : {clip.dateiname}
+Dauer : {clip.dauer:.1f}s · Auflösung : {clip.aufloesung} · {clip.bildrate} fps
+Szenen erkannt : {len(szenen)}
+Framing-Verteilung : {framing_summary or "unbekannt"}
+
+── Sprecher (pyannote-Diarization, ANWESENDE Personen) ──
+{speaker_block}
+
+── Beschreibungen der Szenen (Moondream/LLaMA3) ──
+{beschreibungen_text or "(keine)"}
+
+── Transkription (mlx-whisper — EINZIGE Quelle für Namen) ──
+{transkript_text or "(keine Sprache)"}
+
+Antworte JETZT nur mit dem JSON, faktisch und ohne Erfindungen."""
+
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            r = await client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "prompt": prompt,
+                    "stream": False,
+                    "format": "json",
+                    "options": {"temperature": 0.15, "num_predict": 900, "top_p": 0.8},
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        raise HTTPException(502, f"Ollama nicht erreichbar : {e}")
+
+    raw_answer = (data.get("response") or "").strip()
+    try:
+        synthese = _json.loads(raw_answer)
+    except Exception:
+        # Fallback : encapsule dans un champ narration si le JSON est cassé
+        synthese = {"thema": "?", "narration": raw_answer[:1000], "visuell": "", "ambiance": "", "genre": "?", "personen": []}
+
+    synthese["generated_at"] = _dt.datetime.utcnow().isoformat() + "Z"
+    synthese["model"] = OLLAMA_MODEL
+
+    clip.synthese_json = synthese
+    await db.commit()
+
+    return {"clip_id": str(clip.id), "cached": False, "synthese": synthese}
+
+
 # ─── Clip löschen ────────────────────────────────────────
 
 @router.delete("/{clip_id}")

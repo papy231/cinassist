@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 import time
 from dataclasses import dataclass
@@ -1291,7 +1292,50 @@ def _build_system_prompt(timeline_state: dict | None = None) -> str:
                 "KEIN list_clips-Aufruf nötig — du hast die IDs bereits."
             )
 
-    return f"""Du bist CinAssist, ein KI-Agent für Video-Postproduktion. Du hilfst Profi-Cuttern, Routinearbeiten zu automatisieren (Sichtung/Dérushage, Plansuche, Cleanup, Rohschnitt).{tl_block}
+    # ── Stil-Präferenzen (Nutzerprofil persistiert per localStorage) ──
+    # Le frontend inclut `style_prefs` dans le timeline_state s'ils sont définis.
+    # Format attendu (tous optionnels) :
+    #   { language, target_duration_sec, cutting_style, framing_mix,
+    #     auto_cleanup_silences, auto_remove_hesitations, min_scene_duration_sec }
+    style_block = ""
+    if timeline_state and isinstance(timeline_state, dict):
+        sp = timeline_state.get("style_prefs") or {}
+        if sp and isinstance(sp, dict):
+            lang_names = {"de": "Deutsch", "en": "Englisch", "fr": "Französisch"}
+            style_lines: list[str] = []
+            lang = sp.get("language")
+            if lang in lang_names:
+                style_lines.append(f"- Bevorzugte Antwortsprache: {lang_names[lang]}")
+            td = sp.get("target_duration_sec")
+            if isinstance(td, (int, float)) and td > 0:
+                style_lines.append(f"- Ziel-Dauer für Rohschnitte: {int(td)} s")
+            cs = sp.get("cutting_style")
+            cs_map = {"fast": "schnell (2-4 s pro Cut)", "moderate": "moderat (5-8 s pro Cut)", "slow": "ruhig (10+ s pro Cut)"}
+            if cs in cs_map:
+                style_lines.append(f"- Schnittrhythmus: {cs_map[cs]}")
+            fm = sp.get("framing_mix")
+            if isinstance(fm, dict):
+                parts = []
+                for k, label in [("closeup", "Close-up"), ("medium", "Medium"), ("wide", "Wide")]:
+                    v = fm.get(k)
+                    if isinstance(v, (int, float)) and v > 0:
+                        parts.append(f"{int(v)}% {label}")
+                if parts:
+                    style_lines.append(f"- Framing-Mix bevorzugt: {', '.join(parts)}")
+            msd = sp.get("min_scene_duration_sec")
+            if isinstance(msd, (int, float)) and msd > 0:
+                style_lines.append(f"- Mindestszenenlänge: {msd} s")
+            if sp.get("auto_cleanup_silences") is not None:
+                style_lines.append(f"- Automatischer Cleanup Stille: {'JA' if sp['auto_cleanup_silences'] else 'NEIN'}")
+            if sp.get("auto_remove_hesitations") is not None:
+                style_lines.append(f"- Automatisches Entfernen von Zögerungen: {'JA' if sp['auto_remove_hesitations'] else 'NEIN'}")
+            if style_lines:
+                style_block = (
+                    "\n\n>>> NUTZER-STIL-PRÄFERENZEN (respektiere diese Werte in allen Vorschlägen und Ausführungen):\n"
+                    + "\n".join(style_lines)
+                )
+
+    return f"""Du bist CinAssist, ein KI-Agent für Video-Postproduktion. Du hilfst Profi-Cuttern, Routinearbeiten zu automatisieren (Sichtung/Dérushage, Plansuche, Cleanup, Rohschnitt).{tl_block}{style_block}
 
 Du antwortest AUSSCHLIESSLICH in gültigem JSON, niemals Freitext außerhalb des JSON.
 
@@ -1484,6 +1528,278 @@ async def run_agent_sync(req: AgentRunRequest, db: AsyncSession = Depends(get_db
         trace.append(evt)
     final = next((e["content"] for e in reversed(trace) if e["type"] == "done"), None)
     return {"final_answer": final, "trace": trace, "step_count": len(trace)}
+
+
+# ─── Compare takes : jugement LLM sur 2-4 scènes ─────────────────────
+# Endpoint dédié qui utilise llama3 (rapide, ~4-8s) plutôt que qwen2.5:14b
+# pour donner un verdict IA sur quel take est le meilleur. Utilisé par la
+# modale "Comparison Mode" côté frontend.
+
+COMPARE_MODEL = "llama3"  # 4.7 GB, ~10-15 tok/s sur Mac mini → verdict en 5-10s
+
+
+class CompareRequest(BaseModel):
+    scene_ids: list[str] = Field(..., min_length=2, max_length=4)
+    criteria: str | None = Field(
+        None,
+        description="Kriterium für die Auswahl (z. B. 'bester Emotion', 'schärfstes Bild'). Default = Gesamtqualität für Rohschnitt.",
+    )
+
+
+@router.post("/compare")
+async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    """Charge N scènes, les compare via llama3, retourne un verdict structuré."""
+    from backend.core.database import Szene, Speaker, SceneSpeaker
+    from sqlalchemy import select as _sel
+
+    # Charge les scènes + clip parent + speakers
+    scenes_rows = (
+        await db.execute(
+            _sel(Szene)
+            .options(selectinload(Szene.clip))
+            .where(Szene.id.in_(req.scene_ids))
+        )
+    ).scalars().all()
+
+    if len(scenes_rows) < 2:
+        raise HTTPException(400, "Mindestens 2 gültige Szenen erforderlich.")
+
+    # Résout les speakers par scène
+    scene_speakers: dict[str, list[str]] = {}
+    for s in scenes_rows:
+        ss_rows = (
+            await db.execute(
+                _sel(SceneSpeaker, Speaker.label_auto)
+                .join(Speaker, Speaker.id == SceneSpeaker.speaker_id)
+                .where(SceneSpeaker.scene_id == s.id)
+            )
+        ).all()
+        scene_speakers[str(s.id)] = [row[1] for row in ss_rows] if ss_rows else []
+
+    # Sérialize pour la réponse frontend
+    scenes_out = []
+    for s in scenes_rows:
+        thumb = s.thumbnail_pfad
+        if thumb and "/temp/" in thumb:
+            thumb = thumb[thumb.index("/temp/"):]
+        scenes_out.append({
+            "scene_id": str(s.id),
+            "clip_id": str(s.clip_id),
+            "clip_name": s.clip.dateiname if s.clip else "?",
+            "clip_proxy_url": f"/proxies/{s.clip_id}_proxy.mp4" if s.clip else None,
+            "szenen_nr": s.szenen_nr,
+            "start_zeit": s.start_zeit,
+            "end_zeit": s.end_zeit,
+            "dauer": s.dauer,
+            "framing": s.framing,
+            "face_count": s.face_count,
+            "transkription": s.transkription,
+            "beschreibung": s.beschreibung,
+            "speakers": scene_speakers.get(str(s.id), []),
+            "thumbnail_pfad": thumb,
+        })
+
+    # Build prompt structuré pour llama3
+    criteria_line = req.criteria or "Gesamtqualität für einen Rohschnitt (klares Framing, verständlicher Dialog, Emotion)"
+    takes_txt = ""
+    for i, sc in enumerate(scenes_out, start=1):
+        speakers_str = ", ".join(sc["speakers"]) if sc["speakers"] else "keine Erkennung"
+        takes_txt += (
+            f"\nTake {i} — scene_id: {sc['scene_id']}\n"
+            f"  Clip: {sc['clip_name']}, Szene {sc['szenen_nr']}\n"
+            f"  Zeit: {sc['start_zeit']:.1f}s → {sc['end_zeit']:.1f}s ({sc['dauer']:.1f}s)\n"
+            f"  Framing: {sc['framing'] or 'unbekannt'} · Gesichter: {sc['face_count'] or 0}\n"
+            f"  Sprecher: {speakers_str}\n"
+            f"  Transkription: \"{(sc['transkription'] or '')[:200]}\"\n"
+            f"  Beschreibung: {(sc['beschreibung'] or '')[:200]}\n"
+        )
+
+    prompt = (
+        "Du bist ein erfahrener Videoschnittassistent. Vergleiche diese Takes und wähle "
+        f"den besten nach folgendem Kriterium:\n{criteria_line}\n"
+        f"{takes_txt}\n"
+        "Antworte ausschließlich im JSON-Format:\n"
+        '{\n'
+        '  "best_scene_id": "<uuid des besten Takes>",\n'
+        '  "reasoning": "<1-2 Sätze warum dieser Take am besten ist>",\n'
+        '  "per_scene": {\n'
+        '    "<scene_id>": {"rank": 1, "note": "<1 Satz zu diesem Take>"},\n'
+        '    ...\n'
+        "  }\n"
+        "}\n"
+    )
+
+    # Call llama3 (pas qwen — plus rapide)
+    t0 = time.time()
+    async with httpx.AsyncClient(timeout=90) as client:
+        r = await client.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json={"model": COMPARE_MODEL, "prompt": prompt, "format": "json", "stream": False, "options": {"temperature": 0.3}},
+        )
+        r.raise_for_status()
+        data = r.json()
+    wall = time.time() - t0
+    resp_text = data.get("response", "")
+
+    try:
+        verdict = json.loads(resp_text)
+    except Exception:
+        verdict = {"best_scene_id": scenes_out[0]["scene_id"], "reasoning": f"JSON-Parsing-Fehler; erster Take als Fallback. Raw: {resp_text[:200]}", "per_scene": {}}
+
+    # Assure que best_scene_id existe dans nos scènes
+    valid_ids = {sc["scene_id"] for sc in scenes_out}
+    if verdict.get("best_scene_id") not in valid_ids:
+        verdict["best_scene_id"] = scenes_out[0]["scene_id"]
+
+    return {
+        "scenes": scenes_out,
+        "verdict": verdict,
+        "meta": {
+            "model": COMPARE_MODEL,
+            "wall_s": round(wall, 2),
+            "tokens": data.get("eval_count", 0),
+        },
+    }
+
+
+# ─── Agent proactif : suggestions après ingest ────────────────────────
+# À la fin de l'ingest d'un clip (status → "analysiert"), le frontend appelle
+# cet endpoint pour recevoir 2-4 suggestions concrètes basées sur ce qu'on a
+# détecté (speakers, framings, transkriptions). Chaque suggestion contient un
+# `prompt` prêt-à-envoyer à l'agent ReAct normal.
+#
+# Règles déterministes (pas de LLM) : rapide, prédictible, tune-able.
+
+_HESITATION_PATTERN = re.compile(r"\b(äh+m?|ähm|hmm+|euh+|uhh+|umm+|erm|eh)\b", re.IGNORECASE)
+
+
+@router.post("/proactive/{clip_id}")
+async def proactive_suggestions(clip_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Analyse les données d'ingest d'un clip et propose 2-4 actions concrètes.
+
+    Retourne toujours un objet stable même si le clip n'a pas assez de data
+    (ex: pas de scènes) — le frontend affichera juste "keine Vorschläge".
+    """
+    from backend.core.database import Clip, Szene, Speaker
+    from sqlalchemy import select, func
+
+    # Charge clip + scènes en une seule requête
+    clip_row = (
+        await db.execute(select(Clip).where(Clip.id == clip_id))
+    ).scalar_one_or_none()
+    if not clip_row:
+        raise HTTPException(404, f"Clip {clip_id} nicht gefunden.")
+
+    scenes = (
+        await db.execute(
+            select(Szene)
+            .where(Szene.clip_id == clip_id)
+            .order_by(Szene.szenen_nr)
+        )
+    ).scalars().all()
+
+    n_speakers = (
+        await db.execute(
+            select(func.count(Speaker.id)).where(Speaker.clip_id == clip_id)
+        )
+    ).scalar() or 0
+
+    n_scenes = len(scenes)
+    n_dialog = sum(1 for s in scenes if (s.transkription or "").strip())
+    n_mute = n_scenes - n_dialog
+    n_closeup = sum(1 for s in scenes if s.framing in ("closeup", "extreme_closeup"))
+    n_wide = sum(1 for s in scenes if s.framing in ("wide_with_person", "wide_no_person"))
+    n_medium = sum(1 for s in scenes if s.framing == "medium")
+
+    # Compte les hésitations dans toutes les transkriptions
+    n_hesitations = 0
+    for s in scenes:
+        if s.transkription:
+            n_hesitations += len(_HESITATION_PATTERN.findall(s.transkription))
+
+    total_dauer = sum((s.dauer or 0) for s in scenes)
+    clip_label = clip_row.dateiname or "Clip"
+
+    suggestions: list[dict] = []
+
+    # Règle #1 : multi-speaker → grouper
+    if n_speakers >= 2:
+        suggestions.append({
+            "title": "Sprecher trennen",
+            "description": f"{n_speakers} verschiedene Sprecher erkannt in {clip_label}.",
+            "prompt": f"Zeige mir die Szenen mit den {n_speakers} verschiedenen Sprechern in {clip_label} getrennt.",
+            "priority": 90,
+            "icon": "users",
+        })
+
+    # Règle #2 : hésitations → cleanup
+    if n_hesitations >= 3:
+        suggestions.append({
+            "title": "Zögerungen entfernen",
+            "description": f"{n_hesitations} Zögerungen (äh, ähm, hmm) im Transkript gefunden.",
+            "prompt": f"Entferne die Zögerungen im Clip {clip_label}.",
+            "priority": 85,
+            "icon": "scissors",
+        })
+
+    # Règle #3 : scènes muettes = probable stille → cleanup
+    if n_mute >= 2 and n_dialog >= 1:
+        suggestions.append({
+            "title": "Stille entfernen",
+            "description": f"{n_mute} Szenen ohne Dialog erkannt — vermutlich lange Stille zwischen den Sprech-Segmenten.",
+            "prompt": f"Entferne die Stille im Clip {clip_label}.",
+            "priority": 80,
+            "icon": "volume-off",
+        })
+
+    # Règle #4 : mix framings → rough cut
+    if n_closeup >= 2 and n_wide >= 1:
+        suggestions.append({
+            "title": "Rohschnitt bauen",
+            "description": f"{n_closeup} Close-ups + {n_wide} Weitwinkel + {n_medium} Medium — reicht für einen ersten Rohschnitt.",
+            "prompt": f"Baue einen Rohschnitt aus den besten Szenen von {clip_label}.",
+            "priority": 75,
+            "icon": "film",
+        })
+
+    # Règle #5 : clip long → best takes
+    if n_scenes >= 8:
+        suggestions.append({
+            "title": "Beste Takes auswählen",
+            "description": f"{n_scenes} Szenen erkannt ({int(total_dauer)}s Material) — bewerten und filtern?",
+            "prompt": f"Wähle die 5 besten Szenen aus {clip_label} basierend auf Framing, Sprecher und Dialog.",
+            "priority": 70,
+            "icon": "star",
+        })
+
+    # Règle #6 (fallback) : au moins proposer un splitten sur les scènes
+    if not suggestions and n_scenes >= 3:
+        suggestions.append({
+            "title": "Szenen splitten",
+            "description": f"{n_scenes} Szenen erkannt — auf die Timeline geteilt bringen?",
+            "prompt": f"Teile den Clip {clip_label} an den erkannten Szenengrenzen.",
+            "priority": 50,
+            "icon": "scissors",
+        })
+
+    suggestions.sort(key=lambda s: -s["priority"])
+
+    return {
+        "clip_id": clip_id,
+        "clip_name": clip_label,
+        "stats": {
+            "n_scenes": n_scenes,
+            "n_speakers": n_speakers,
+            "n_dialog_scenes": n_dialog,
+            "n_mute_scenes": n_mute,
+            "n_closeup": n_closeup,
+            "n_medium": n_medium,
+            "n_wide": n_wide,
+            "n_hesitations": n_hesitations,
+            "total_dauer": round(total_dauer, 1),
+        },
+        "suggestions": suggestions[:4],  # max 4 pour ne pas noyer l'UI
+    }
 
 
 @router.get("/tools")
