@@ -1544,9 +1544,18 @@ async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | 
                 observation = {"error": f"Tool crashed: {e}"}
 
         yield {"type": "observation", "step": step, "content": observation}
+        # Le frontend reçoit l'observation COMPLÈTE (ci-dessus). Mais on ne réinjecte
+        # PAS les gros champs (segments, decisions…) dans le contexte qwen (4096
+        # tokens) : ça saturait le context → l'agent perdait le fil et rebouclait sur
+        # generate_*. On envoie au LLM un résumé compact.
+        llm_obs = observation
+        if isinstance(observation, dict):
+            _HEAVY = ("segments", "segments_preview", "decisions", "candidates",
+                      "candidates_summary", "plan", "beat_times_s")
+            llm_obs = {k: v for k, v in observation.items() if k not in _HEAVY}
         trace_lines.append(
             f"Assistant: {json.dumps(parsed, ensure_ascii=False)}\n"
-            f"Observation: {json.dumps(observation, ensure_ascii=False)[:2000]}"
+            f"Observation: {json.dumps(llm_obs, ensure_ascii=False)[:1200]}"
         )
 
     # MAX_ITER atteint sans que l'agent ait dit "done" : synthèse forcée
