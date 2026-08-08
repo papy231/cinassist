@@ -22,18 +22,27 @@ from pathlib import Path
 logger = logging.getLogger("cinassist.vision_describe")
 
 _CJK_RE = re.compile(r"[一-鿿㐀-䶿぀-ゟ゠-ヿ가-힯]")
-_DEFAULT_PROMPT = "Describe the scene in this image in one sentence."
-_FALLBACK_PROMPT = "What do you see in this image?"
+# Achtung: die Vorgabe "in one sentence" triggert bei moondream einen Bug —
+# das erste Token wird verschluckt und der Output beginnt mit "urn of…/urns of…"
+# (z.B. "urn of a guitar…" statt "A picture of a guitar…"). Prompts OHNE
+# Satz-Längen-Vorgabe liefern sauberen Text. Siehe _is_bad → "truncation_artifact".
+_DEFAULT_PROMPT = "Describe the main subject, action and setting of this image."
+_FALLBACK_PROMPT = "Describe this image."
+
+# Führendes verstümmeltes Token des moondream-Bugs (case-insensitiv).
+_ARTIFACT_RE = re.compile(r"^\s*urns?\s+(of|with)\b", re.IGNORECASE)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 
 
 def _is_bad(output: str) -> tuple[bool, str]:
-    """Détecte outputs foireux : vide, trop court, CJK, très répétitif."""
+    """Détecte outputs foireux : vide, trop court, CJK, très répétitif, artefact."""
     if not output or len(output.strip()) < 15:
         return True, "too_short"
     if _CJK_RE.search(output):
         return True, "cjk_hallucination"
+    if _ARTIFACT_RE.match(output):
+        return True, "truncation_artifact"
     # Détection répétition : même token répété 5+ fois consécutivement
     tokens = output.split()
     if len(tokens) > 5:
