@@ -1189,6 +1189,29 @@ async def generate_story_from_pool(db: AsyncSession, clip_ids: list[str],
         })
         decisions.append(decision)
 
+    # Post-fill : le LLM sous-vise souvent la Zieldauer. Si on est nettement en
+    # dessous, on étend chaque plan vers la fin de sa scène (proportionnel à la
+    # marge dispo) pour approcher la cible — sans dépasser les scènes réelles.
+    if target_duration_s and segments:
+        total = sum(float(s["duration"]) for s in segments)
+        if total < target_duration_s * 0.9:
+            picked = [d for d in decisions if d.get("outcome") == "picked"]
+            heads = []
+            for s in segments:
+                sc = by_id.get(s["src_scene_id"])
+                scene_end = ((float(sc.start_zeit or 0.0) + float(sc.dauer or 0.0))
+                             if sc else s["media_start"] + s["duration"])
+                heads.append(max(0.0, round(scene_end - (s["media_start"] + s["duration"]), 3)))
+            total_head = sum(heads)
+            if total_head > 0:
+                add = min(target_duration_s - total, total_head)
+                for s, d, h in zip(segments, picked, heads):
+                    extra = min(h, add * (h / total_head))
+                    if extra > 0.05:
+                        s["duration"] = round(s["duration"] + extra, 3)
+                        d["target_duration_s"] = s["duration"]
+                        d["trim_strategy"] = (d.get("trim_strategy", "") + "+postfill")
+
     total_dur = sum(float(s["duration"]) for s in segments)
     return {
         "story_title": story.get("story_title"),
