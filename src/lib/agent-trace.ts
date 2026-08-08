@@ -79,6 +79,47 @@ export function traceToProposals(
     const thoughtEvt = [...trace.slice(0, i)].reverse().find((e) => e.type === "thought");
     const agentThought = typeof thoughtEvt?.content === "string" ? thoughtEvt.content : undefined;
 
+    // ── Tools de génération → charge la séquence sur la timeline (loadSequence).
+    const GEN_TOOLS = new Set(["generate_story", "generate_timeline_from_prompt"]);
+    if (GEN_TOOLS.has(toolName)) {
+      const segsRaw = obs.segments as unknown;
+      if (!Array.isArray(segsRaw) || segsRaw.length === 0) continue;
+      const segments: Array<{ clipId: string; mediaStart: number; duration: number; name?: string }> = [];
+      for (const raw of segsRaw) {
+        if (typeof raw !== "object" || raw === null) continue;
+        const s = raw as { clip_id?: string; media_start?: number; duration?: number; clip_name?: string };
+        if (typeof s.clip_id !== "string" || typeof s.duration !== "number") continue;
+        segments.push({
+          clipId: s.clip_id,
+          mediaStart: typeof s.media_start === "number" ? s.media_start : 0,
+          duration: s.duration,
+          name: s.clip_name,
+        });
+      }
+      if (segments.length === 0) continue;
+      const totalSec = segments.reduce((a, s) => a + s.duration, 0);
+      const storyTitle = typeof obs.story_title === "string" ? obs.story_title : undefined;
+      const narrative = typeof obs.narrative_intent_de === "string" ? obs.narrative_intent_de : undefined;
+      const titleByTool: Record<string, string> = {
+        generate_story: "Auto-Rohschnitt",
+        generate_timeline_from_prompt: "Timeline aus Prompt",
+      };
+      const base = titleByTool[toolName] ?? "Timeline generieren";
+      // replace=true : le résultat d'une génération EST la timeline (premier montage
+      // si vide, ou remplace le montage courant).
+      proposals.push({
+        title: storyTitle ? `${base}: „${storyTitle}"` : base,
+        summary: `${segments.length} Segmente · ${totalSec.toFixed(1)}s${narrative ? " · " + narrative : ""}`,
+        edits: [{ type: "loadSequence", segments, replace: true }],
+        provenance: {
+          tool: toolName,
+          params: (actionEvt?.args ?? {}) as Record<string, unknown>,
+          agentThought,
+        },
+      });
+      continue;
+    }
+
     const silencesRaw = obs.silences as unknown;
     if (!Array.isArray(silencesRaw) || silencesRaw.length === 0) continue;
 

@@ -520,6 +520,9 @@ export default function Editor() {
   // Refs miroirs lus depuis les closures (scrub, clavier, engine.onError).
   const totalDurationRef = useRef(0);
   const tlClipsRef = useRef<TLClip[]>([]);
+  // Miroir des clips média (bibliothèque) — lu dans applyCmdToClips où le param
+  // `clips` (TLClip[]) masque l'état média `clips` (ClipDTO[]).
+  const mediaClipsRef = useRef<ClipDTO[]>([]);
 
   // Proxys défectueux détectés au runtime (0-byte → 416 → DEMUXER_ERROR). On les
   // blackliste et on rebâtit la timeline moteur sur l'original (videoUrl). Ref =
@@ -952,6 +955,7 @@ export default function Editor() {
 
   // Miroirs refs lus depuis les closures (scrub, clavier, engine.onError).
   useEffect(() => { tlClipsRef.current = tlClips; }, [tlClips]);
+  useEffect(() => { mediaClipsRef.current = clips; }, [clips]);
   useEffect(() => { totalDurationRef.current = totalDuration; }, [totalDuration]);
 
   // Broken-proxy fallback, wired through the engine. The pool reports a media
@@ -3463,10 +3467,74 @@ export default function Editor() {
         return clips.map((c) => c.tlId !== cmd.tlId ? c : { ...c, gainDb: Math.abs(cmd.gainDb) < 0.05 ? undefined : cmd.gainDb });
       case "move":
       case "trim":
-      case "insert":
-        // TODO ticket futur (nécessite une refonte de placement + reflow)
-        console.warn("[executor] cmd non encore implémentée :", cmd.type);
+        // Non gérées par l'executor batch (édition directe via UI).
+        console.warn("[executor] cmd non gérée ici :", cmd.type);
         return clips;
+      case "loadSequence": {
+        // Construit des TLClips depuis les segments source (résultat génération IA).
+        // Posés back-to-back sur V1 ; replace=true efface l'existant.
+        const media = mediaClipsRef.current;
+        const base = cmd.replace
+          ? 0
+          : clips.filter((c) => (c.videoTrackIndex ?? 0) === 0)
+                 .reduce((m, c) => Math.max(m, c.start + c.duration), 0);
+        let cursor = base;
+        const now = Date.now();
+        const built: TLClip[] = [];
+        cmd.segments.forEach((seg, i) => {
+          const src = media.find((c) => c.id === seg.clipId);
+          if (!src) return;
+          const sourceDur = src.dauer || seg.duration;
+          built.push({
+            tlId: `gen-${now}-${i}-${seg.clipId}`,
+            clipId: seg.clipId,
+            name: seg.name || src.dateiname.replace(/\.[^/.]+$/, ""),
+            start: Math.round(cursor * 1000) / 1000,
+            duration: seg.duration,
+            mediaStart: seg.mediaStart,
+            sourceDuration: sourceDur,
+            stripUrl: abs(src.strip_url),
+            waveformUrl: abs(src.waveform_url),
+            proxyUrl: abs(src.proxy_url || src.video_url),
+            videoUrl: abs(src.video_url),
+            hasAudio: !!src.waveform_url,
+            videoTrackIndex: 0,
+            audioTrackIndex: 0,
+          });
+          cursor += seg.duration;
+        });
+        return cmd.replace ? built : [...clips, ...built];
+      }
+      case "insert": {
+        // Insertion d'un seul clip source à `at` sur `videoTrackIndex` (mode append :
+        // pas de reflow ; collision → repoussé au tail de la piste).
+        const media = mediaClipsRef.current;
+        const src = media.find((c) => c.id === cmd.clipId);
+        if (!src) { console.warn("[executor] insert: source introuvable", cmd.clipId); return clips; }
+        const vIdx = Math.max(0, Math.min(MAX_TRACKS - 1, cmd.videoTrackIndex));
+        const dur = cmd.duration ?? src.dauer ?? 0;
+        let cursor = Math.max(0, cmd.at);
+        const rowClips = clips.filter((c) => (c.videoTrackIndex ?? 0) === vIdx);
+        const collides = rowClips.some((c) => cursor + dur > c.start && c.start + c.duration > cursor);
+        if (collides) cursor = rowClips.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
+        const seg: TLClip = {
+          tlId: `ins-${cmd.clipId}-${Date.now()}`,
+          clipId: cmd.clipId,
+          name: src.dateiname.replace(/\.[^/.]+$/, ""),
+          start: Math.round(cursor * 1000) / 1000,
+          duration: dur,
+          mediaStart: cmd.mediaStart ?? 0,
+          sourceDuration: src.dauer || dur,
+          stripUrl: abs(src.strip_url),
+          waveformUrl: abs(src.waveform_url),
+          proxyUrl: abs(src.proxy_url || src.video_url),
+          videoUrl: abs(src.video_url),
+          hasAudio: !!src.waveform_url,
+          videoTrackIndex: vIdx,
+          audioTrackIndex: vIdx,
+        };
+        return [...clips, seg];
+      }
       default:
         return clips;
     }

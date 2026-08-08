@@ -128,6 +128,25 @@ export type SetRangeCmd = {
 };
 
 /**
+ * Charge une séquence entière de segments source sur la timeline (résultat
+ * d'une génération IA : generate_story / generate_timeline_from_prompt). Chaque
+ * item référence un clip média source + son in-point + sa durée. Les segments
+ * sont posés séquentiellement (back-to-back) sur la piste vidéo 0.
+ *   - replace=true  : remplace toute la timeline (premier montage)
+ *   - replace=false : ajoute à la suite du contenu existant
+ */
+export type LoadSequenceCmd = {
+  type: "loadSequence";
+  segments: Array<{
+    clipId: string;
+    mediaStart: number;
+    duration: number;
+    name?: string;
+  }>;
+  replace: boolean;
+};
+
+/**
  * Union discriminée exhaustive. Ajouter un nouveau type ici oblige TS à
  * vérifier tous les switch/case qui consomment `TimelineCmd`.
  */
@@ -138,6 +157,7 @@ export type TimelineCmd =
   | MoveCmd
   | TrimCmd
   | InsertCmd
+  | LoadSequenceCmd
   | SetFadeCmd
   | SetGainCmd
   | AddMarkerCmd
@@ -187,6 +207,10 @@ export function describeCommand(cmd: TimelineCmd): string {
       return `Clip ${cmd.side === "left" ? "links" : "rechts"} trimmen (${cmd.delta > 0 ? "+" : ""}${cmd.delta.toFixed(2)}s)`;
     case "insert":
       return `Clip einfügen bei ${cmd.at.toFixed(2)}s (${cmd.mode})`;
+    case "loadSequence": {
+      const total = cmd.segments.reduce((a, s) => a + s.duration, 0);
+      return `${cmd.replace ? "Timeline generieren" : "Sequenz anhängen"}: ${cmd.segments.length} Segmente · ${total.toFixed(1)}s`;
+    }
     case "setFade":
       return `Fade ${cmd.side === "in" ? "in" : "out"}: ${cmd.duration.toFixed(2)}s`;
     case "setGain":
