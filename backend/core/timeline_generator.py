@@ -1023,12 +1023,76 @@ async def _llm_pick_and_trim(plan: dict, candidates: dict,
     return segments, decisions, llm_meta
 
 
+_MIN_SEGMENT_S = 1.0
+
+
+def _normalize_durations(segments: list[dict], scene_end_by_id: dict[str, float],
+                         target_duration_s: float | None) -> set[int]:
+    """Rapproche la durée totale de la Zieldauer, dans les deux sens :
+      - trop court → étend chaque plan vers la fin de sa scène (marge dispo) ;
+      - trop long  → rogne chaque plan par la fin (plancher _MIN_SEGMENT_S).
+    Mute `segments` en place, retourne les indices modifiés (pour les décisions).
+
+    Partagé par assemble_timeline (prompt-driven) et generate_story (material-first).
+    """
+    if not target_duration_s or not segments:
+        return set()
+    total = sum(float(s["duration"]) for s in segments)
+    # Déjà dans la tolérance ±10% → ne touche à rien.
+    if abs(total - target_duration_s) <= target_duration_s * 0.1:
+        return set()
+    changed: set[int] = set()
+
+    if total < target_duration_s:
+        # Extension vers la fin de scène, proportionnelle à la marge dispo.
+        heads: list[float] = []
+        for s in segments:
+            end = scene_end_by_id.get(str(s.get("src_scene_id")))
+            head = max(0.0, round(end - (float(s["media_start"]) + float(s["duration"])), 3)) \
+                if end is not None else 0.0
+            heads.append(head)
+        total_head = sum(heads)
+        if total_head <= 0:
+            return set()
+        add = min(target_duration_s - total, total_head)
+        for i, (s, h) in enumerate(zip(segments, heads)):
+            extra = min(h, add * (h / total_head))
+            if extra > 0.05:
+                s["duration"] = round(float(s["duration"]) + extra, 3)
+                changed.add(i)
+    else:
+        # Rognage par la fin, proportionnel à la marge au-dessus du plancher.
+        rooms = [max(0.0, float(s["duration"]) - _MIN_SEGMENT_S) for s in segments]
+        total_room = sum(rooms)
+        if total_room <= 0:
+            return set()
+        remove = min(total - target_duration_s, total_room)
+        for i, (s, room) in enumerate(zip(segments, rooms)):
+            cut = min(room, remove * (room / total_room))
+            if cut > 0.05:
+                s["duration"] = round(float(s["duration"]) - cut, 3)
+                changed.add(i)
+    return changed
+
+
+def _scene_end_map_from_candidates(candidates: dict) -> dict[str, float]:
+    """{scene_id: start_zeit+dauer} depuis les candidats (pour le post-fill)."""
+    out: dict[str, float] = {}
+    for cand_list in (candidates.get("slots") or {}).values():
+        for c in cand_list:
+            out[str(c["scene_id"])] = float(c.get("start_zeit") or 0.0) + float(c.get("dauer") or 0.0)
+    return out
+
+
 async def assemble_timeline(plan: dict, candidates: dict,
-                            mode: str = "heuristic") -> dict:
+                            mode: str = "heuristic",
+                            target_duration_s: float | None = None) -> dict:
     """Phase 3 : à partir du plan et des candidats, choisit un pick définitif
     par slot avec trim + ordering.
 
     mode = "heuristic" (rapide, top-1 + centre) ou "llm" (qwen picke).
+    Si target_duration_s est fourni (ou lisible dans le plan), un post-fill
+    étend les durées vers la fin des scènes pour coller à la cible.
     """
     t0 = time.time()
     if mode == "llm":
@@ -1036,6 +1100,21 @@ async def assemble_timeline(plan: dict, candidates: dict,
     else:
         segments, decisions = _heuristic_pick_and_trim(plan, candidates)
         llm_meta = {}
+
+    # Post-fill durée (comme generate_story) pour réduire la déviation de durée.
+    target = target_duration_s
+    if target is None:
+        try:
+            target = float(plan.get("target_duration_s")) if plan.get("target_duration_s") else None
+        except (TypeError, ValueError):
+            target = None
+    changed = _normalize_durations(segments, _scene_end_map_from_candidates(candidates), target)
+    if changed:
+        picked = [d for d in decisions if d.get("outcome") == "picked"]
+        for i in changed:
+            if i < len(picked):
+                picked[i]["target_duration_s"] = segments[i]["duration"]
+                picked[i]["trim_strategy"] = (picked[i].get("trim_strategy", "") + "+dur_norm")
 
     total_dur = sum(float(s["duration"]) for s in segments)
     return {
@@ -1189,28 +1268,18 @@ async def generate_story_from_pool(db: AsyncSession, clip_ids: list[str],
         })
         decisions.append(decision)
 
-    # Post-fill : le LLM sous-vise souvent la Zieldauer. Si on est nettement en
-    # dessous, on étend chaque plan vers la fin de sa scène (proportionnel à la
-    # marge dispo) pour approcher la cible — sans dépasser les scènes réelles.
-    if target_duration_s and segments:
-        total = sum(float(s["duration"]) for s in segments)
-        if total < target_duration_s * 0.9:
-            picked = [d for d in decisions if d.get("outcome") == "picked"]
-            heads = []
-            for s in segments:
-                sc = by_id.get(s["src_scene_id"])
-                scene_end = ((float(sc.start_zeit or 0.0) + float(sc.dauer or 0.0))
-                             if sc else s["media_start"] + s["duration"])
-                heads.append(max(0.0, round(scene_end - (s["media_start"] + s["duration"]), 3)))
-            total_head = sum(heads)
-            if total_head > 0:
-                add = min(target_duration_s - total, total_head)
-                for s, d, h in zip(segments, picked, heads):
-                    extra = min(h, add * (h / total_head))
-                    if extra > 0.05:
-                        s["duration"] = round(s["duration"] + extra, 3)
-                        d["target_duration_s"] = s["duration"]
-                        d["trim_strategy"] = (d.get("trim_strategy", "") + "+postfill")
+    # Post-fill : le LLM sous-vise souvent la Zieldauer → étend les plans vers la
+    # fin de leur scène (helper partagé avec assemble_timeline).
+    scene_end_by_id = {
+        str(s.id): float(s.start_zeit or 0.0) + float(s.dauer or 0.0) for s in scenes
+    }
+    changed = _normalize_durations(segments, scene_end_by_id, target_duration_s)
+    if changed:
+        picked = [d for d in decisions if d.get("outcome") == "picked"]
+        for i in changed:
+            if i < len(picked):
+                picked[i]["target_duration_s"] = segments[i]["duration"]
+                picked[i]["trim_strategy"] = (picked[i].get("trim_strategy", "") + "+dur_norm")
 
     total_dur = sum(float(s["duration"]) for s in segments)
     return {

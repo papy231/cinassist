@@ -121,7 +121,8 @@ async def run_one(bp: BenchmarkPrompt, clip_ids: list[str],
                                                    use_query_rewrite=use_query_rewrite)
 
         # Phase 3
-        timeline = await assemble_timeline(plan, candidates, mode=assemble_mode)
+        timeline = await assemble_timeline(plan, candidates, mode=assemble_mode,
+                                           target_duration_s=bp.duration_s)
 
     bench_wall = time.time() - t_start
 

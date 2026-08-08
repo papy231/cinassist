@@ -184,8 +184,9 @@ async def timeline_aus_prompt_generieren(
     )
     _log_stage("02_candidates", candidates, run_id)
 
-    # Phase 3 : Assemble
-    timeline_data = await assemble_timeline(plan, candidates, mode=body.assemble_mode)
+    # Phase 3 : Assemble (avec post-fill vers la durée cible)
+    timeline_data = await assemble_timeline(plan, candidates, mode=body.assemble_mode,
+                                            target_duration_s=body.duration_s)
     _log_stage("03_timeline", timeline_data, run_id)
 
     saved_id: str | None = None

@@ -577,7 +577,8 @@ async def _tool_generate_timeline_from_prompt(args: dict, db: AsyncSession) -> d
         candidates = await tg_retrieve(plan, pool_ids, db, top_k=top_k)
         _log_stage("02_candidates", candidates, run_id)
 
-        timeline = await tg_assemble(plan, candidates, mode=assemble_mode)
+        timeline = await tg_assemble(plan, candidates, mode=assemble_mode,
+                                     target_duration_s=duration_s)
         _log_stage("03_timeline", timeline, run_id)
     except Exception as e:
         logger.exception("generate_timeline_from_prompt failed")
