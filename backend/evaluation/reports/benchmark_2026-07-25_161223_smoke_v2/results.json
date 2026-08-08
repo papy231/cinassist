@@ -1,0 +1,1228 @@
+[
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_short",
+        "prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "duration_s": 15,
+        "profile": "broll_nature",
+        "notes": "Court, doit filtrer wide_no_person, éviter dialogue accidentel"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 15,
+      "actual_duration_s": 16.34,
+      "duration_deviation_s": 1.34,
+      "duration_deviation_pct": 0.0893,
+      "n_segments": 3,
+      "unique_clips": 3,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "wide_no_person": 3
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.394,
+      "min_top1_score": 0.2864,
+      "max_top1_score": 0.4849,
+      "avg_top1_top2_gap": 0.0646,
+      "n_slots_planned": 3,
+      "n_slots_picked": 3,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "centered_default": 1,
+        "full_scene": 2
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.4449,
+      "coverage_min": 0.321,
+      "coverage_max": 0.6039,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6039
+        },
+        {
+          "slot_id": "2",
+          "score": 0.4098
+        },
+        {
+          "slot_id": "3",
+          "score": 0.321
+        }
+      ],
+      "wall_total_s": 45.11,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 40.87,
+      "wall_retrieve_s": 4.19,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_nature_short",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "Ruhige Naturaufnahmen von Wasser und Landschaft ohne menschliche Präsenz",
+      "target_duration_s": 15,
+      "planned_total_duration_s": 14.8,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild eines ruhigen Sees mit sanften Wellen und grünen Uferbäumen",
+          "intent_en": "wide shot of a calm lake with gentle waves and green trees along the shore",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkel-Bild eines Flusses im Sonnenaufgang mit sanften Wellen",
+          "intent_en": "wide shot of a river at sunrise with gentle waves",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Romantisch, sanft und ruhig"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkel-Bild eines Bergsees mit klarer Oberfläche",
+          "intent_en": "wide shot of a mountain lake with clear surface",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und klar"
+        }
+      ],
+      "_meta": {
+        "wall_s": 40.87,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 3,
+      "total_duration_s": 16.34,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild eines ruhigen Sees mit sanften Wellen und grünen Uferbäumen",
+        "outcome": "picked",
+        "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+        "clip_name": "pexels_waves_17s.mp4",
+        "clip_score": 0.1416,
+        "text_score": 1.0,
+        "score": 0.4849,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 5.38,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+            "score": 0.3473
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3433
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkel-Bild eines Flusses im Sonnenaufgang mit sanften Wellen",
+        "outcome": "picked",
+        "scene_id": "eaabe8e4-a54c-4163-907b-7fb8c2eb6233",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1037,
+        "text_score": 0.5604,
+        "score": 0.2864,
+        "target_duration_s": 4.76,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.2742
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.2473
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkel-Bild eines Bergsees mit klarer Oberfläche",
+        "outcome": "picked",
+        "scene_id": "b5c8314c-77e3-4725-810b-b1c843a1e097",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1885,
+        "text_score": 0.744,
+        "score": 0.4107,
+        "target_duration_s": 4.583,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "4f0a9cb3-492b-4b1c-81da-ef19117b746f",
+            "score": 0.3667
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3071
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_60s",
+        "prompt": "60 Sekunden ruhige Naturstimmung, Weitwinkel-Landschaften mit sanftem Übergang, keine Menschen",
+        "duration_s": 60,
+        "profile": "broll_nature",
+        "notes": "Base test — reference pour la reg"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 60,
+      "actual_duration_s": 100.86,
+      "duration_deviation_s": 40.86,
+      "duration_deviation_pct": 0.681,
+      "n_segments": 17,
+      "unique_clips": 8,
+      "clip_diversity": 0.4706,
+      "framing_distribution": {
+        "wide_no_person": 17
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.3502,
+      "min_top1_score": 0.2651,
+      "max_top1_score": 0.4676,
+      "avg_top1_top2_gap": 0.0161,
+      "n_slots_planned": 17,
+      "n_slots_picked": 17,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "min_words_broll": 4,
+        "centered_default": 3,
+        "full_scene": 10
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.4856,
+      "coverage_min": 0.3455,
+      "coverage_max": 0.6394,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.5454
+        },
+        {
+          "slot_id": "2",
+          "score": 0.3455
+        },
+        {
+          "slot_id": "3",
+          "score": 0.602
+        },
+        {
+          "slot_id": "12",
+          "score": 0.5463
+        },
+        {
+          "slot_id": "13",
+          "score": 0.4068
+        },
+        {
+          "slot_id": "14",
+          "score": 0.403
+        },
+        {
+          "slot_id": "15",
+          "score": 0.6201
+        },
+        {
+          "slot_id": "16",
+          "score": 0.5665
+        },
+        {
+          "slot_id": "17",
+          "score": 0.6394
+        },
+        {
+          "slot_id": "18",
+          "score": 0.4033
+        },
+        {
+          "slot_id": "19",
+          "score": 0.5811
+        },
+        {
+          "slot_id": "20",
+          "score": 0.4333
+        },
+        {
+          "slot_id": "21",
+          "score": 0.5068
+        },
+        {
+          "slot_id": "22",
+          "score": 0.3689
+        },
+        {
+          "slot_id": "23",
+          "score": 0.4662
+        },
+        {
+          "slot_id": "24",
+          "score": 0.4667
+        },
+        {
+          "slot_id": "25",
+          "score": 0.3531
+        }
+      ],
+      "wall_total_s": 216.42,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 215.41,
+      "wall_retrieve_s": 0.97,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_nature_60s",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "60 Sekunden ruhige Naturstimmung, Weitwinkel-Landschaften mit sanftem Übergang, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "Eine ruhige und friedliche Naturstimmung durch landschaftliche Weitwinkel-Aufnahmen ohne menschliche Präsenz",
+      "target_duration_s": 60,
+      "planned_total_duration_s": 59.8,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Etablierendes Weitwinkel-Bild einer ruhigen Landschaft am frühen Morgen",
+          "intent_en": "wide establishing shot of a calm landscape in the early morning",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, atmosphärisch, sanft einleitend"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+          "intent_en": "wide shot of a quiet forest with sunlight filtering through the trees",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+          "intent_en": "wide shot of a tranquil river with gentle flowing water",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        },
+        {
+          "slot_id": 12,
+          "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+          "intent_en": "wide shot of a calm mountain lake with a mirror-like water surface",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 13,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+          "intent_en": "wide shot of a tranquil field with gentle wind blowing through the crops",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        },
+        {
+          "slot_id": 14,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+          "intent_en": "wide shot of a quiet forest with sunlight filtering through the trees",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 15,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+          "intent_en": "wide shot of a tranquil river with gentle flowing water",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        },
+        {
+          "slot_id": 16,
+          "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+          "intent_en": "wide shot of a calm mountain lake with a mirror-like water surface",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 17,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+          "intent_en": "wide shot of a tranquil field with gentle wind blowing through the crops",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        },
+        {
+          "slot_id": 18,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+          "intent_en": "wide shot of a quiet forest with sunlight filtering through the trees",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 19,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+          "intent_en": "wide shot of a tranquil river with gentle flowing water",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        },
+        {
+          "slot_id": 20,
+          "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+          "intent_en": "wide shot of a calm mountain lake with a mirror-like water surface",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 21,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+          "intent_en": "wide shot of a tranquil field with gentle wind blowing through the crops",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        },
+        {
+          "slot_id": 22,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+          "intent_en": "wide shot of a quiet forest with sunlight filtering through the trees",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 23,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+          "intent_en": "wide shot of a tranquil river with gentle flowing water",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        },
+        {
+          "slot_id": 24,
+          "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+          "intent_en": "wide shot of a calm mountain lake with a mirror-like water surface",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 25,
+          "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+          "intent_en": "wide shot of a tranquil field with gentle wind blowing through the crops",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und entspannt, sanfter Übergang"
+        }
+      ],
+      "_meta": {
+        "wall_s": 215.41,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "60 Sekunden ruhige Naturstimmung, Weitwinkel-Landschaften mit sanftem Übergang, keine Menschen",
+        "pool_aware": true
+      },
+      "_validation_warnings": [
+        "total mid-duration (93.5s) deviates 56% from target (60s)"
+      ]
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 17,
+      "total_duration_s": 100.86,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Etablierendes Weitwinkel-Bild einer ruhigen Landschaft am frühen Morgen",
+        "outcome": "picked",
+        "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.2048,
+        "text_score": 0.5728,
+        "score": 0.352,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 2.458,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3468
+          },
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.3334
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+        "outcome": "picked",
+        "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1856,
+        "text_score": 0.7941,
+        "score": 0.429,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "b5c8314c-77e3-4725-810b-b1c843a1e097",
+            "score": 0.3521
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3517
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+        "outcome": "picked",
+        "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+        "clip_name": "pexels_waves_17s.mp4",
+        "clip_score": 0.1519,
+        "text_score": 0.9412,
+        "score": 0.4676,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 5.38,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+            "score": 0.4498
+          },
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.4059
+          }
+        ]
+      },
+      {
+        "slot_id": "12",
+        "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+        "outcome": "picked",
+        "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+        "clip_name": "pexels_presenter_19s.mp4",
+        "clip_score": 0.0848,
+        "text_score": 0.9744,
+        "score": 0.4407,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 6.14,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.42
+          },
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.3915
+          }
+        ]
+      },
+      {
+        "slot_id": "13",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+        "outcome": "picked",
+        "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1834,
+        "text_score": 0.5898,
+        "score": 0.346,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 5.354,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "2f92f9fd-87a3-4e04-8c4b-713738ecb0ec",
+            "score": 0.3301
+          },
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.2983
+          }
+        ]
+      },
+      {
+        "slot_id": "14",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+        "outcome": "picked",
+        "scene_id": "b5c8314c-77e3-4725-810b-b1c843a1e097",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1487,
+        "text_score": 0.6571,
+        "score": 0.3521,
+        "target_duration_s": 4.583,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "2f92f9fd-87a3-4e04-8c4b-713738ecb0ec",
+            "score": 0.3406
+          },
+          {
+            "scene_id": "0a6c3ec2-367f-4652-a2ef-4359568b381e",
+            "score": 0.2944
+          }
+        ]
+      },
+      {
+        "slot_id": "15",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+        "outcome": "picked",
+        "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1175,
+        "text_score": 0.8385,
+        "score": 0.4059,
+        "target_duration_s": 5.24,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.3914
+          },
+          {
+            "scene_id": "0a6c3ec2-367f-4652-a2ef-4359568b381e",
+            "score": 0.3639
+          }
+        ]
+      },
+      {
+        "slot_id": "16",
+        "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+        "outcome": "picked",
+        "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1203,
+        "text_score": 0.7982,
+        "score": 0.3915,
+        "target_duration_s": 5.08,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0a6c3ec2-367f-4652-a2ef-4359568b381e",
+            "score": 0.3702
+          },
+          {
+            "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+            "score": 0.3611
+          }
+        ]
+      },
+      {
+        "slot_id": "17",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+        "outcome": "picked",
+        "scene_id": "2f92f9fd-87a3-4e04-8c4b-713738ecb0ec",
+        "clip_name": "bbb_middle.mp4",
+        "clip_score": 0.1833,
+        "text_score": 0.5502,
+        "score": 0.3301,
+        "target_duration_s": 6.208,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.2981
+          },
+          {
+            "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+            "score": 0.2968
+          }
+        ]
+      },
+      {
+        "slot_id": "18",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+        "outcome": "picked",
+        "scene_id": "0a6c3ec2-367f-4652-a2ef-4359568b381e",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1346,
+        "text_score": 0.5342,
+        "score": 0.2944,
+        "target_duration_s": 4.76,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+            "score": 0.2911
+          },
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.2868
+          }
+        ]
+      },
+      {
+        "slot_id": "19",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+        "outcome": "picked",
+        "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+        "clip_name": "mlk_1min.mp4",
+        "clip_score": 0.1237,
+        "text_score": 0.6779,
+        "score": 0.3454,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 32.5,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+            "score": 0.3282
+          },
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.3181
+          }
+        ]
+      },
+      {
+        "slot_id": "20",
+        "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+        "outcome": "picked",
+        "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.103,
+        "text_score": 0.6898,
+        "score": 0.3377,
+        "target_duration_s": 5.52,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+            "score": 0.3359
+          },
+          {
+            "scene_id": "4e23a2f7-1d96-4717-817d-16c7ff47f5e0",
+            "score": 0.3179
+          }
+        ]
+      },
+      {
+        "slot_id": "21",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+        "outcome": "picked",
+        "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+        "clip_name": "mlk_1min.mp4",
+        "clip_score": 0.1392,
+        "text_score": 0.5332,
+        "score": 0.2968,
+        "target_duration_s": 3.804,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "4f0a9cb3-492b-4b1c-81da-ef19117b746f",
+            "score": 0.2881
+          },
+          {
+            "scene_id": "eaabe8e4-a54c-4163-907b-7fb8c2eb6233",
+            "score": 0.2797
+          }
+        ]
+      },
+      {
+        "slot_id": "22",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Waldes mit Sonnenschein durch die Bäume",
+        "outcome": "picked",
+        "scene_id": "4f0a9cb3-492b-4b1c-81da-ef19117b746f",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1094,
+        "text_score": 0.5457,
+        "score": 0.2839,
+        "target_duration_s": 6.36,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "a5e81add-6a91-47a2-b2aa-615d6f35d968",
+            "score": 0.279
+          },
+          {
+            "scene_id": "1fc5072a-6505-42fa-93cf-1be15bde2d10",
+            "score": 0.2703
+          }
+        ]
+      },
+      {
+        "slot_id": "23",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Flusses mit sanftem Wasserlauf",
+        "outcome": "picked",
+        "scene_id": "eaabe8e4-a54c-4163-907b-7fb8c2eb6233",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1342,
+        "text_score": 0.5436,
+        "score": 0.298,
+        "target_duration_s": 4.76,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "a5e81add-6a91-47a2-b2aa-615d6f35d968",
+            "score": 0.2842
+          },
+          {
+            "scene_id": "4e23a2f7-1d96-4717-817d-16c7ff47f5e0",
+            "score": 0.2806
+          }
+        ]
+      },
+      {
+        "slot_id": "24",
+        "intent_de": "Weitwinkel-Aufnahme eines ruhigen Bergsees mit spiegelnder Wasseroberfläche",
+        "outcome": "picked",
+        "scene_id": "4e23a2f7-1d96-4717-817d-16c7ff47f5e0",
+        "clip_name": "pexels_chef_23s.mp4",
+        "clip_score": 0.1293,
+        "text_score": 0.6009,
+        "score": 0.3179,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 8.062,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "a5e81add-6a91-47a2-b2aa-615d6f35d968",
+            "score": 0.3131
+          },
+          {
+            "scene_id": "c858b681-501c-48be-a363-9ff445986977",
+            "score": 0.291
+          }
+        ]
+      },
+      {
+        "slot_id": "25",
+        "intent_de": "Weitwinkel-Aufnahme eines stillen Feldes mit sanftem Wind",
+        "outcome": "picked",
+        "scene_id": "1fc5072a-6505-42fa-93cf-1be15bde2d10",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.1585,
+        "text_score": 0.425,
+        "score": 0.2651,
+        "target_duration_s": 5.542,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "a5e81add-6a91-47a2-b2aa-615d6f35d968",
+            "score": 0.2616
+          },
+          {
+            "scene_id": "c858b681-501c-48be-a363-9ff445986977",
+            "score": 0.1894
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_urban",
+        "prompt": "30 Sekunden Stadtbilder, Straßen und Gebäude aus der Distanz, kein Fokus auf Personen",
+        "duration_s": 30,
+        "profile": "broll_nature",
+        "notes": "Urbain plutôt que nature, pas beaucoup dans pool"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 30,
+      "actual_duration_s": 29.88,
+      "duration_deviation_s": 0.12,
+      "duration_deviation_pct": 0.004,
+      "n_segments": 5,
+      "unique_clips": 5,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "wide_no_person": 5
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.4438,
+      "min_top1_score": 0.3763,
+      "max_top1_score": 0.4957,
+      "avg_top1_top2_gap": 0.04,
+      "n_slots_planned": 5,
+      "n_slots_picked": 5,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "min_words_broll": 2,
+        "full_scene": 2,
+        "centered_default": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5109,
+      "coverage_min": 0.3279,
+      "coverage_max": 0.5875,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.5875
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5843
+        },
+        {
+          "slot_id": "3",
+          "score": 0.5211
+        },
+        {
+          "slot_id": "4",
+          "score": 0.3279
+        },
+        {
+          "slot_id": "5",
+          "score": 0.5334
+        }
+      ],
+      "wall_total_s": 61.77,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 61.31,
+      "wall_retrieve_s": 0.42,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_urban",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "30 Sekunden Stadtbilder, Straßen und Gebäude aus der Distanz, kein Fokus auf Personen"
+    },
+    "plan": {
+      "narrative_intent_de": "Eine atemberaubende Tour durch die Stadt mit weiten Szenen von Straßen und Gebäuden",
+      "target_duration_s": 30,
+      "planned_total_duration_s": 29,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild einer ruhigen Straße mit hohen Gebäuden im Hintergrund",
+          "intent_en": "wide shot of a quiet street with tall buildings in the background",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes mit vielen Gebäuden",
+          "intent_en": "wide shot of a bustling market square with many buildings",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebendig, belebt"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkel-Bild eines breiten Flusses mit Brücken und Gebäuden",
+          "intent_en": "wide shot of a wide river with bridges and buildings",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Gelassen, friedlich"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Weitwinkel-Bild eines Parkplatzes mit hohen Gebäuden im Hintergrund",
+          "intent_en": "wide shot of a parking lot with tall buildings in the background",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Stadtbild, ruhig"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Weitwinkel-Bild eines breiten Boulevards mit vielen Gebäuden",
+          "intent_en": "wide shot of a broad boulevard with many buildings",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebendig, belebt"
+        }
+      ],
+      "_meta": {
+        "wall_s": 61.31,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "30 Sekunden Stadtbilder, Straßen und Gebäude aus der Distanz, kein Fokus auf Personen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 5,
+      "total_duration_s": 29.88,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild einer ruhigen Straße mit hohen Gebäuden im Hintergrund",
+        "outcome": "picked",
+        "scene_id": "c858b681-501c-48be-a363-9ff445986977",
+        "clip_name": "pexels_street_86s.mp4",
+        "clip_score": 0.2191,
+        "text_score": 0.9108,
+        "score": 0.4957,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 39.753,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+            "score": 0.3835
+          },
+          {
+            "scene_id": "2f92f9fd-87a3-4e04-8c4b-713738ecb0ec",
+            "score": 0.327
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes mit vielen Gebäuden",
+        "outcome": "picked",
+        "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+        "clip_name": "mlk_1min.mp4",
+        "clip_score": 0.1594,
+        "text_score": 0.9007,
+        "score": 0.4559,
+        "target_duration_s": 3.804,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+            "score": 0.441
+          },
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.4274
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkel-Bild eines breiten Flusses mit Brücken und Gebäuden",
+        "outcome": "picked",
+        "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1447,
+        "text_score": 0.9156,
+        "score": 0.4531,
+        "target_duration_s": 5.08,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.4455
+          },
+          {
+            "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+            "score": 0.4428
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Weitwinkel-Bild eines Parkplatzes mit hohen Gebäuden im Hintergrund",
+        "outcome": "picked",
+        "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.13,
+        "text_score": 0.7458,
+        "score": 0.3763,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.3236
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3223
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Weitwinkel-Bild eines breiten Boulevards mit vielen Gebäuden",
+        "outcome": "picked",
+        "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+        "clip_name": "pexels_presenter_19s.mp4",
+        "clip_score": 0.1008,
+        "text_score": 0.9437,
+        "score": 0.438,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 6.14,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.4253
+          },
+          {
+            "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+            "score": 0.4235
+          }
+        ]
+      }
+    ]
+  }
+]

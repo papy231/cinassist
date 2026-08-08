@@ -11,7 +11,7 @@ const nextConfig: NextConfig = {
   // éviter le DNS-rebinding. On whitelist explicitement le tailnet + éventuellement
   // d'autres URLs (funnel, IP locale, etc.).
   allowedDevOrigins: [
-    "mac-mini-openclaw.tailef3707.ts.net",
+    "macmini.tailef3707.ts.net",
     "*.tailef3707.ts.net",
     "100.102.28.112",
     "localhost",

@@ -48,6 +48,7 @@ def _nonempty(p: Path) -> bool:
 async def clip_hochladen(
     datei: UploadFile = File(...),
     quelle: str = Form(..., description="'A' oder 'B'"),
+    ueberschreiben: bool = Form(False, description="Vorhandenen Clip gleichen Namens ersetzen"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -74,6 +75,35 @@ async def clip_hochladen(
     # Validierung: Dateigröße (Content-Length Header)
     if datei.size and datei.size > MAX_DATEIGROESSE:
         raise HTTPException(400, "Datei zu groß (max. 5 GB).")
+
+    # Duplikat-Prüfung nach Dateiname. Bei vorhandenem Namen ohne `ueberschreiben`
+    # → 409 mit strukturiertem detail, damit das Frontend "Ersetzen" anbieten kann.
+    vorhandene = list(
+        (await db.execute(select(Clip).where(Clip.dateiname == dateiname))).scalars().all()
+    )
+    if vorhandene and not ueberschreiben:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "duplicate_name",
+                "dateiname": dateiname,
+                "existing_clip_id": str(vorhandene[0].id),
+                "anzahl": len(vorhandene),
+            },
+        )
+    if vorhandene and ueberschreiben:
+        for alt in vorhandene:
+            try:
+                alt_pfad = Path(alt.dateipfad)
+                if alt_pfad.exists():
+                    alt_pfad.unlink()
+                alt_thumbs = Path(f"temp/thumbs_{alt.id}")
+                if alt_thumbs.exists():
+                    shutil.rmtree(alt_thumbs)
+            except Exception:
+                pass
+            await db.delete(alt)
+        await db.commit()
 
     # Datei speichern
     clip_id = str(uuid.uuid4())
@@ -250,7 +280,7 @@ async def clip_analyse(clip_id: str, db: AsyncSession = Depends(get_db)):
                 "beschreibung": s.beschreibung,
                 "transkription": s.transkription,
                 "transkription_json": s.transkription_json,
-                "hat_embedding": s.clip_embedding is not None and s.clip_embedding != [0.0] * 512,
+                "hat_embedding": s.clip_embedding is not None and any(v != 0.0 for v in s.clip_embedding),
                 "thumbnail_pfad": s.thumbnail_pfad,
             }
             for s in szenen

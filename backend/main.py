@@ -47,7 +47,7 @@ app = FastAPI(
 # ─── CORS (aus env CORS_ORIGINS, Default: localhost:3000/3001/3003) ──────
 # Tailscale-URL & Prod-Domains via env CORS_ORIGINS="url1,url2,..."
 from backend.core.config import CORS_ORIGINS
-_extra_origin = "https://mac-mini-openclaw.tailef3707.ts.net:3003"
+_extra_origin = "https://macmini.tailef3707.ts.net:3003"
 _origins = list(dict.fromkeys(CORS_ORIGINS + [_extra_origin]))  # dedup, keep order
 app.add_middleware(
     CORSMiddleware,

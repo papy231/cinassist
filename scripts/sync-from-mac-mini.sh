@@ -7,7 +7,7 @@
 set -e
 
 PROJ="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
-MC="pascalnikiema@mac-mini-openclaw.tailef3707.ts.net"
+MC="pascalnikiema@macmini.tailef3707.ts.net"
 
 echo "▶ Sync code from Mac mini → $PROJ"
 rsync -avz --delete \

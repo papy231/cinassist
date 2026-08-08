@@ -125,23 +125,55 @@ export default function ClipAnalysisModal({ clipId, onClose }: { clipId: string;
   const [pipeline, setPipeline] = useState<Pipeline | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Analyse encore en cours (backend renvoie 409 tant que status != "analysiert").
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzingMsg, setAnalyzingMsg] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    Promise.all([
-      fetch(`${API}/api/clips/${clipId}/analyse`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(`Analyse HTTP ${r.status}`)))),
-      fetch(`${API}/api/clips/${clipId}/pipeline`).then((r) => (r.ok ? r.json() : null)),
-    ])
-      .then(([a, p]) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const rA = await fetch(`${API}/api/clips/${clipId}/analyse`);
+        // 409 = analyse pas encore terminée → pas une erreur : spinner + re-poll.
+        if (rA.status === 409) {
+          let msg = "Dieser Clip wird noch verarbeitet.";
+          try { const body = await rA.json(); if (body?.detail) msg = String(body.detail); } catch {}
+          if (cancelled) return;
+          setAnalyzing(true);
+          setAnalyzingMsg(msg);
+          setError(null);
+          setLoading(false);
+          timer = setTimeout(poll, 3000);
+          return;
+        }
+        if (!rA.ok) throw new Error(`Analyse HTTP ${rA.status}`);
+        const a = await rA.json();
+        const p = await fetch(`${API}/api/clips/${clipId}/pipeline`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null);
         if (cancelled) return;
         setAnalyse(a);
         setPipeline(p);
-      })
-      .catch((e: Error) => { if (!cancelled) setError(e.message); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+        setAnalyzing(false);
+        setError(null);
+        setLoading(false);
+      } catch (e) {
+        if (cancelled) return;
+        setError((e as Error).message);
+        setAnalyzing(false);
+        setLoading(false);
+      }
+    };
+
+    setLoading(true);
+    setError(null);
+    setAnalyse(null);
+    setAnalyzing(false);
+    poll();
+
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [clipId]);
 
   const tabs: Array<{ key: typeof tab; label: string }> = [
@@ -179,7 +211,7 @@ export default function ClipAnalysisModal({ clipId, onClose }: { clipId: string;
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              disabled={loading}
+              disabled={loading || analyzing}
               style={{ padding: "6px 12px", borderRadius: 6, background: tab === t.key ? "rgba(229,193,0,0.14)" : "transparent", border: "none", color: tab === t.key ? "#e5c100" : "#c8c8c8", fontSize: 12, cursor: "pointer", fontWeight: tab === t.key ? 600 : 400 }}
             >
               {t.label}
@@ -190,8 +222,20 @@ export default function ClipAnalysisModal({ clipId, onClose }: { clipId: string;
         {/* Content */}
         <div style={{ flex: 1, overflowY: "auto", padding: 18 }}>
           {loading && <div style={{ color: "#888", textAlign: "center", padding: 40 }}>Lade Analyse-Daten…</div>}
+          {analyzing && (
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, padding: 48, textAlign: "center" }}>
+              <svg width={36} height={36} viewBox="0 0 24 24" fill="none" stroke="#e5c100" strokeWidth={2.4} strokeLinecap="round" strokeDasharray="14 42" style={{ animation: "spin 0.9s linear infinite" }}>
+                <circle cx="12" cy="12" r="9" />
+              </svg>
+              <div style={{ fontSize: 14, fontWeight: 600, color: "#e5c100" }}>Analyse läuft…</div>
+              <div style={{ fontSize: 12, color: "#8a8a8a", maxWidth: 380, lineHeight: 1.5 }}>
+                {analyzingMsg || "Dieser Clip wird noch verarbeitet (Szenenerkennung, Transkription, CLIP-Embeddings)."}
+              </div>
+              <div style={{ fontSize: 11, color: "#666" }}>Aktualisiert automatisch…</div>
+            </div>
+          )}
           {error && <div style={{ color: "#e88", padding: 12, background: "rgba(255,120,120,0.08)", borderRadius: 6 }}>Fehler: {error}</div>}
-          {!loading && !error && analyse && (
+          {!loading && !analyzing && !error && analyse && (
             <>
               {tab === "info" && <OverviewTab analyse={analyse} pipeline={pipeline} />}
               {tab === "szenen" && <ScenesTab szenen={analyse.szenen} />}

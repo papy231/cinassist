@@ -1,0 +1,174 @@
+[
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_short",
+        "prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "duration_s": 15,
+        "profile": "broll_nature",
+        "notes": "Court, doit filtrer wide_no_person, éviter dialogue accidentel"
+      },
+      "assemble_mode": "baseline_random",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 15,
+      "actual_duration_s": 15.0,
+      "duration_deviation_s": 0.0,
+      "duration_deviation_pct": 0.0,
+      "n_segments": 3,
+      "unique_clips": 3,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "wide_no_person": 2,
+        "medium": 1
+      },
+      "framing_entropy": 0.9183,
+      "avg_top1_score": 0.0,
+      "min_top1_score": 0.0,
+      "max_top1_score": 0.0,
+      "avg_top1_top2_gap": 0.0,
+      "n_slots_planned": 3,
+      "n_slots_picked": 3,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "random_centered": 3
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.0,
+      "coverage_min": 0.0,
+      "coverage_max": 0.0,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": null
+        },
+        {
+          "slot_id": "2",
+          "score": null
+        },
+        {
+          "slot_id": "3",
+          "score": null
+        }
+      ],
+      "wall_total_s": 0.04,
+      "wall_pool_summary_s": 0.04,
+      "wall_plan_s": 0.0,
+      "wall_retrieve_s": 0.0,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_nature_short",
+      "profile": "broll_nature",
+      "assemble_mode": "baseline_random",
+      "prompt_text": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "(baseline random — kein Prompt-Verständnis)",
+      "target_duration_s": 15,
+      "planned_total_duration_s": 15.0,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 1.6,
+          "duration_max_s": 2.4,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 6.4,
+          "duration_max_s": 9.6,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.800000000000001,
+          "duration_max_s": 7.199999999999999,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        }
+      ],
+      "_meta": {
+        "wall_s": 0.0,
+        "model": "baseline_random",
+        "temperature": 0.0,
+        "user_prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "seed": 42
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "baseline_random",
+      "segment_count": 3,
+      "total_duration_s": 15.0,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "",
+        "outcome": "picked",
+        "scene_id": "0d3dd224-d80c-4ea0-ac10-9df33100a457",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.0,
+        "text_score": 0.0,
+        "score": 0.0,
+        "target_duration_s": 1.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "random_centered",
+        "framing": "wide_no_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "",
+        "outcome": "picked",
+        "scene_id": "c858b681-501c-48be-a363-9ff445986977",
+        "clip_name": "pexels_street_86s.mp4",
+        "clip_score": 0.0,
+        "text_score": 0.0,
+        "score": 0.0,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 39.253,
+        "trim_strategy": "random_centered",
+        "framing": "wide_no_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "",
+        "outcome": "picked",
+        "scene_id": "1dad0a1e-0e15-42b3-8a17-5ec06cb58e83",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.0,
+        "text_score": 0.0,
+        "score": 0.0,
+        "target_duration_s": 6.0,
+        "trim_start_in_scene_s": 3.94,
+        "trim_strategy": "random_centered",
+        "framing": "medium",
+        "runner_ups": []
+      }
+    ]
+  }
+]

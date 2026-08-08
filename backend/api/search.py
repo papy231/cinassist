@@ -110,12 +110,9 @@ def _get_clip():
 
 
 def _embed_text(query: str) -> np.ndarray:
-    model, tokenizer, device = _get_clip()
-    tokens = tokenizer([query]).to(device)
-    with torch.no_grad():
-        emb = model.encode_text(tokens)
-        emb = emb / emb.norm(dim=-1, keepdim=True)
-    return emb.cpu().numpy()[0].astype(np.float32)
+    # Délègue à l'encodeur partagé (core/clip_encoder) → même modèle que l'ingest.
+    from backend.core import clip_encoder
+    return clip_encoder.embed_text(query)
 
 
 # ─── Schemas ─────────────────────────────────────────────────

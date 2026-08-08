@@ -5,10 +5,13 @@ from pathlib import Path
 
 # ─── Pfade ───────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent.parent
-UPLOAD_DIR = BASE_DIR / "uploads"
-OUTPUT_DIR = BASE_DIR / "outputs"
-TEMP_DIR = BASE_DIR / "temp"
-PROXY_DIR = BASE_DIR / "proxies"
+# CINASSIST_DATA_DIR override: isole media (uploads/proxies/outputs/temp) pour
+# les instances secondaires (ex. instance prof en démo publique).
+DATA_DIR = Path(os.getenv("CINASSIST_DATA_DIR", str(BASE_DIR)))
+UPLOAD_DIR = DATA_DIR / "uploads"
+OUTPUT_DIR = DATA_DIR / "outputs"
+TEMP_DIR = DATA_DIR / "temp"
+PROXY_DIR = DATA_DIR / "proxies"
 
 for d in (UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR, PROXY_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -29,7 +32,12 @@ CELERY_RESULT_BACKEND = REDIS_URL
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
-CLIP_MODEL = os.getenv("CLIP_MODEL", "ViT-B/32")
+# CLIP-Encoder (Bild + Text müssen dasselbe Modell nutzen → siehe core/clip_encoder.py).
+# ViT-L-14 / datacomp_xl liefert deutlich bessere Retrieval-Relevanz als ViT-B-32/openai.
+CLIP_MODEL = os.getenv("CLIP_MODEL", "ViT-L-14")
+CLIP_PRETRAINED = os.getenv("CLIP_PRETRAINED", "datacomp_xl_s13b_b90k")
+# Anzahl Frames pro Szene für das visuelle Embedding (Mittelung → robuster als 1 Frame).
+CLIP_FRAMES = int(os.getenv("CLIP_FRAMES", "3"))
 
 # ─── Cloud LLM Provider (optionale API-Keys) ─────────────
 # Anthropic Claude (z.B. claude-3-5-sonnet-20241022, claude-3-opus-20240229)

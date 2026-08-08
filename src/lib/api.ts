@@ -4,7 +4,13 @@
  */
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
-const WS_API = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8001";
+function resolveWsBase(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (typeof window !== "undefined" && location.hostname !== "localhost") {
+    return `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+  }
+  return "ws://localhost:8001";
+}
 
 // ─── Typen ──────────────────────────────────────────────
 
@@ -385,7 +391,7 @@ export function connectJobWs(
   onMessage: (data: JobUpdate) => void,
   onClose?: () => void,
 ): WebSocket {
-  const ws = new WebSocket(`${WS_API}/ws/jobs/${encodeURIComponent(jobId)}`);
+  const ws = new WebSocket(`${resolveWsBase()}/ws/jobs/${encodeURIComponent(jobId)}`);
   ws.onmessage = (e) => {
     try {
       onMessage(JSON.parse(e.data));

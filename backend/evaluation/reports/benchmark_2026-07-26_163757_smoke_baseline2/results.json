@@ -1,0 +1,412 @@
+[
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_short",
+        "prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "duration_s": 15,
+        "profile": "broll_nature",
+        "notes": "Court, doit filtrer wide_no_person, éviter dialogue accidentel"
+      },
+      "assemble_mode": "baseline_no_filter",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 15,
+      "actual_duration_s": 3.54,
+      "duration_deviation_s": 11.46,
+      "duration_deviation_pct": 0.764,
+      "n_segments": 3,
+      "unique_clips": 2,
+      "clip_diversity": 0.6667,
+      "framing_distribution": {
+        "wide_no_person": 3
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.5249,
+      "min_top1_score": 0.4994,
+      "max_top1_score": 0.5425,
+      "avg_top1_top2_gap": 0.0,
+      "n_slots_planned": 3,
+      "n_slots_picked": 3,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "centered_baseline": 3
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5916,
+      "coverage_min": 0.5642,
+      "coverage_max": 0.6129,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.5975
+        },
+        {
+          "slot_id": "2",
+          "score": 0.6129
+        },
+        {
+          "slot_id": "3",
+          "score": 0.5642
+        }
+      ],
+      "wall_total_s": 70.05,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 66.06,
+      "wall_retrieve_s": 3.93,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_nature_short",
+      "profile": "broll_nature",
+      "assemble_mode": "baseline_no_filter",
+      "prompt_text": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "Ruhige Naturaufnahmen von Wasser und Landschaft ohne menschliche Präsenz",
+      "target_duration_s": 15,
+      "planned_total_duration_s": 14.8,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild eines ruhigen Sees oder Meeres am Morgen",
+          "intent_en": "wide shot of a calm sea or lake in the morning",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und friedlich"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Wellenbewegungen am Meer oder sanfte Wellen im See",
+          "intent_en": "wave movements at the sea or gentle waves in a lake",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Gleitender, entspannter Rhythmus"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Übersicht eines idyllischen Flusslaufs durch grüne Landschaft",
+          "intent_en": "overview of an idyllic river flowing through green landscape",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Idyllisch, ruhig und friedlich"
+        }
+      ],
+      "_meta": {
+        "wall_s": 66.06,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "baseline_no_filter",
+      "segment_count": 3,
+      "total_duration_s": 3.54,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild eines ruhigen Sees oder Meeres am Morgen",
+        "outcome": "picked",
+        "scene_id": "0d3dd224-d80c-4ea0-ac10-9df33100a457",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.2215,
+        "text_score": 1.0,
+        "score": 0.5329,
+        "target_duration_s": 1.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "centered_baseline",
+        "framing": "wide_no_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Wellenbewegungen am Meer oder sanfte Wellen im See",
+        "outcome": "picked",
+        "scene_id": "0d3dd224-d80c-4ea0-ac10-9df33100a457",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.2375,
+        "text_score": 1.0,
+        "score": 0.5425,
+        "target_duration_s": 1.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "centered_baseline",
+        "framing": "wide_no_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Übersicht eines idyllischen Flusslaufs durch grüne Landschaft",
+        "outcome": "picked",
+        "scene_id": "0b5f3401-db6a-4ec4-bff9-b6cbab82941a",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1656,
+        "text_score": 1.0,
+        "score": 0.4994,
+        "target_duration_s": 1.542,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "centered_baseline",
+        "framing": "wide_no_person",
+        "runner_ups": []
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_short",
+        "prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "duration_s": 15,
+        "profile": "broll_nature",
+        "notes": "Court, doit filtrer wide_no_person, éviter dialogue accidentel"
+      },
+      "assemble_mode": "baseline_single_shot",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 15,
+      "actual_duration_s": 0.0,
+      "duration_deviation_s": 15.0,
+      "duration_deviation_pct": 1.0,
+      "n_segments": 0,
+      "clip_diversity": 0.0,
+      "framing_entropy": 0.0,
+      "unique_clips": 0,
+      "avg_top1_score": 0.0,
+      "min_top1_score": 0.0,
+      "max_top1_score": 0.0,
+      "avg_top1_top2_gap": 0.0,
+      "n_slots_planned": 10,
+      "n_slots_picked": 0,
+      "n_slots_skipped": 10,
+      "skipped_ratio": 1.0,
+      "trim_strategy_distribution": {},
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.0,
+      "coverage_min": 0.0,
+      "coverage_max": 0.0,
+      "coverage_per_slot": [],
+      "wall_total_s": 96.51,
+      "wall_pool_summary_s": 0.06,
+      "wall_plan_s": 96.45,
+      "wall_retrieve_s": 0.0,
+      "wall_assemble_s": 96.45,
+      "pool_size": 68,
+      "prompt_id": "broll_nature_short",
+      "profile": "broll_nature",
+      "assemble_mode": "baseline_single_shot",
+      "prompt_text": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "",
+      "target_duration_s": 15,
+      "planned_total_duration_s": 0,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 9,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        },
+        {
+          "slot_id": 10,
+          "intent_de": "",
+          "intent_en": "",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "any",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "baseline dummy slot"
+        }
+      ],
+      "_meta": {
+        "wall_s": 96.45,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "baseline": "single_shot_llm",
+        "error": null
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 96.45,
+      "mode": "baseline_single_shot",
+      "segment_count": 0,
+      "total_duration_s": 0,
+      "skipped_slots": 10,
+      "llm": {
+        "wall_s": 96.45,
+        "error": null
+      }
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "2",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "3",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "4",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "5",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "6",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "7",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "8",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "9",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      },
+      {
+        "slot_id": "10",
+        "intent_de": null,
+        "outcome": "skipped_invalid_scene_id"
+      }
+    ]
+  }
+]

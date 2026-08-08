@@ -300,7 +300,9 @@ export default function Editor() {
   const [loading, setLoading] = useState(true);
   // File d'upload : chaque entrée = un fichier en cours (progress 0-100)
   // ou fini (status). Reste affichée quelques secondes après completion.
-  const [uploadQueue, setUploadQueue] = useState<Array<{ id: string; name: string; size: number; progress: number; status: "uploading" | "analyzing" | "done" | "error"; error?: string; clipId?: string }>>([]);
+  const [uploadQueue, setUploadQueue] = useState<Array<{ id: string; name: string; size: number; progress: number; status: "uploading" | "analyzing" | "done" | "error" | "duplicate"; error?: string; clipId?: string }>>([]);
+  // Fichiers en attente (pour re-upload en cas de "Ersetzen"), gardés hors state.
+  const uploadFilesRef = useRef<Map<string, File>>(new Map());
   const [dropTargetActive, setDropTargetActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -734,10 +736,11 @@ export default function Editor() {
 
   // Upload d'un fichier vidéo → POST /api/clips/upload (multipart).
   // XHR pour la progression. Puis refresh + suit l'ingest via le poll clips.
-  const uploadFile = (file: File, queueId: string) => {
+  const uploadFile = (file: File, queueId: string, ueberschreiben = false) => {
     const fd = new FormData();
     fd.append("datei", file);
     fd.append("quelle", "A");
+    fd.append("ueberschreiben", ueberschreiben ? "true" : "false");
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/clips/upload`);
     xhr.upload.onprogress = (ev) => {
@@ -750,6 +753,7 @@ export default function Editor() {
         try {
           const res = JSON.parse(xhr.responseText) as { clip_id?: string };
           setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, progress: 100, status: "analyzing", clipId: res.clip_id } : it));
+          uploadFilesRef.current.delete(queueId);
           refreshClips();
           // Purge du queue-item après 6s (une fois "analyzing" affiché).
           setTimeout(() => setUploadQueue((q) => q.filter((it) => it.id !== queueId)), 6000);
@@ -758,12 +762,35 @@ export default function Editor() {
         }
       } else {
         let msg = `HTTP ${xhr.status}`;
-        try { const j = JSON.parse(xhr.responseText); if (j.detail) msg = String(j.detail); } catch { /* keep */ }
-        setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "error", error: msg } : it));
+        let istDuplikat = false;
+        try {
+          const j = JSON.parse(xhr.responseText);
+          const d = j.detail;
+          if (d && typeof d === "object" && d.code === "duplicate_name") istDuplikat = true;
+          else if (d) msg = String(d);
+        } catch { /* keep */ }
+        if (istDuplikat) {
+          // Nom déjà présent → propose de remplacer plutôt qu'échouer (boutons inline).
+          setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "duplicate" } : it));
+        } else {
+          setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "error", error: msg } : it));
+        }
       }
     };
     xhr.onerror = () => setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "error", error: "Netzwerkfehler" } : it));
     xhr.send(fd);
+  };
+
+  // "Ersetzen" : re-upload le même fichier avec le flag ueberschreiben.
+  const replaceUpload = (queueId: string) => {
+    const file = uploadFilesRef.current.get(queueId);
+    if (!file) { setUploadQueue((q) => q.filter((it) => it.id !== queueId)); return; }
+    setUploadQueue((q) => q.map((it) => it.id === queueId ? { ...it, status: "uploading", progress: 0, error: undefined } : it));
+    uploadFile(file, queueId, true);
+  };
+  const cancelUpload = (queueId: string) => {
+    uploadFilesRef.current.delete(queueId);
+    setUploadQueue((q) => q.filter((it) => it.id !== queueId));
   };
 
   // Ouvre le modal de confirmation. Calcule les infos affichées (noms, usage TL).
@@ -807,7 +834,7 @@ export default function Editor() {
     if (valid.length === 0) return;
     const entries = valid.map((f) => ({ id: `up-${Date.now()}-${Math.round(f.size)}-${f.name}`, name: f.name, size: f.size, progress: 0, status: "uploading" as const }));
     setUploadQueue((q) => [...q, ...entries]);
-    valid.forEach((f, i) => uploadFile(f, entries[i].id));
+    valid.forEach((f, i) => { uploadFilesRef.current.set(entries[i].id, f); uploadFile(f, entries[i].id); });
     toast(`${valid.length} Datei(en) werden hochgeladen…`, "info", 2000);
   };
 
@@ -4813,12 +4840,14 @@ export default function Editor() {
                     <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
                       {it.status === "error"
                         ? <S w={12} c="#e07a7a"><circle cx="12" cy="12" r="10" /><path d="M12 8v4M12 16h.01" /></S>
-                        : it.status === "analyzing" || it.status === "done"
-                          ? <S w={12} c="#4ec06a"><path d="M20 6L9 17l-5-5" /></S>
-                          : <S w={12} c="#b9d94a" style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>}
+                        : it.status === "duplicate"
+                          ? <S w={12} c="#e5c100"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /><path d="M12 9v4M12 17h.01" /></S>
+                          : it.status === "analyzing" || it.status === "done"
+                            ? <S w={12} c="#4ec06a"><path d="M20 6L9 17l-5-5" /></S>
+                            : <S w={12} c="#b9d94a" style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>}
                       <span style={{ flex: 1, color: "#d4d4d4", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.name}</span>
                       <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 10, color: "#8a8a8a" }}>
-                        {it.status === "uploading" ? `${it.progress}%` : it.status === "analyzing" ? "Analyse…" : it.status === "error" ? "Fehler" : "OK"}
+                        {it.status === "uploading" ? `${it.progress}%` : it.status === "analyzing" ? "Analyse…" : it.status === "duplicate" ? "Existiert bereits" : it.status === "error" ? "Fehler" : "OK"}
                       </span>
                     </div>
                     {it.status === "uploading" && (
@@ -4828,6 +4857,13 @@ export default function Editor() {
                     )}
                     {it.status === "error" && it.error && (
                       <div style={{ fontSize: 10, color: "#e07a7a", marginTop: 2 }}>{it.error}</div>
+                    )}
+                    {it.status === "duplicate" && (
+                      <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 10, color: "#e5c100", flex: 1, minWidth: 0 }}>Ein Clip mit diesem Namen existiert bereits.</span>
+                        <button onClick={() => replaceUpload(it.id)} style={{ fontSize: 10, padding: "3px 9px", borderRadius: 4, border: "1px solid #e5c100", background: "rgba(229,193,0,0.14)", color: "#e5c100", cursor: "pointer", fontWeight: 600, whiteSpace: "nowrap" }}>Ersetzen</button>
+                        <button onClick={() => cancelUpload(it.id)} style={{ fontSize: 10, padding: "3px 9px", borderRadius: 4, border: "1px solid #333", background: "transparent", color: "#aaa", cursor: "pointer", whiteSpace: "nowrap" }}>Abbrechen</button>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -5085,7 +5121,7 @@ export default function Editor() {
         {/* Multicam — echte KI-Funktion, als Chip erhalten */}
         <button style={{ ...chip, gap: 6, height: 32 }} title="Multicam-Sync (KI)"
           onClick={() => sendAi(`Synchronisiere alle Clips per sync_multicam. Nutze das Werkzeug direkt.`)}>
-          <S sw={1.7}><rect x="3" y="6" width="11" height="8" rx="1.5" /><rect x="9" y="10" width="12" height="8" rx="1.5" /></S>Multicam
+          <S sw={1.7}><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></S>Multicam
         </button>
 
         <span style={{ fontSize: 11, color: "#7a7a7a", marginLeft: 8, whiteSpace: "nowrap" }}>
@@ -6179,7 +6215,7 @@ export default function Editor() {
       {/* ─── Untere Leiste ─── */}
       <div style={{ height: 50, flex: "none", display: "flex", alignItems: "center", padding: "0 18px", gap: 16, background: "#161617", borderTop: "1px solid #000", position: "relative" }}>
         <button onClick={goHome} style={sqBtn} title="Start"><S><path d="M3 11l9-8 9 8M5 9v11h14V9" /></S></button>
-        <button onClick={() => setSettingsOpen((o) => !o)} style={{ ...sqBtn, background: settingsOpen ? "#3a3a3e" : "#242426" }} title="Einstellungen"><S sw={1.7}><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2l-.3-2.5H10.7l-.3 2.5a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.3 2.5h2.6l.3-2.5a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z" /></S></button>
+        <button onClick={() => setSettingsOpen((o) => !o)} style={{ ...sqBtn, background: settingsOpen ? "#3a3a3e" : "#242426" }} title="Einstellungen"><S sw={1.7}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></S></button>
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 40, fontSize: 13 }}>
           {TABS.map((t) => {
             const active = tab === t.id;
@@ -6188,7 +6224,7 @@ export default function Editor() {
               <button key={t.id} onClick={() => setTab(t.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, color: col }}>
                 <span style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: active ? 600 : 400 }}>
                   {t.id === "cut" && <S c={col}><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M20 4L8.5 15.5M20 20L8.5 8.5" /></S>}
-                  {t.id === "edit" && <S c={col} sw={1.7}><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></S>}
+                  {t.id === "edit" && <S c={col} sw={1.7}><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></S>}
                   {t.id === "color" && <S c={col} sw={1.7}><path d="M12 3c4.5 0 8 3 8 7 0 3-2.5 4-4 4h-2a2 2 0 0 0-1 3.7A2 2 0 0 1 12 21a9 9 0 0 1 0-18z" /><circle cx="7.5" cy="11" r="1" /><circle cx="12" cy="7.5" r="1" /><circle cx="16.5" cy="11" r="1" /></S>}
                   {t.id === "sound" && <S c={col} sw={1.7}><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></S>}
                   {t.label}
@@ -6641,7 +6677,7 @@ export default function Editor() {
         <div onClick={() => setSettingsOpen(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: 480, maxHeight: "80vh", background: "#161617", borderRadius: 14, border: "1px solid #232326", boxShadow: "0 20px 60px rgba(0,0,0,.7)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div style={{ padding: "14px 18px", borderBottom: "1px solid #232326", display: "flex", alignItems: "center", gap: 8 }}>
-              <S c="#b9d94a" sw={1.7}><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2l-.3-2.5H10.7l-.3 2.5a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.3 2.5h2.6l.3-2.5a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z" /></S>
+              <S c="#b9d94a" sw={1.7}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></S>
               <span style={{ fontSize: 14, fontWeight: 600 }}>Einstellungen</span>
               <button onClick={() => setSettingsOpen(false)} style={{ marginLeft: "auto", fontSize: 16, color: "#7a7a7a", background: "transparent", border: "none", cursor: "pointer" }}>✕</button>
             </div>

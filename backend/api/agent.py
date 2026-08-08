@@ -617,6 +617,99 @@ async def _tool_generate_rough_cut(args: dict, db: AsyncSession) -> dict:
     }
 
 
+async def _tool_generate_timeline_from_prompt(args: dict, db: AsyncSession) -> dict:
+    """Kern der Bachelorarbeit: Timeline aus natürlicher Beschreibung generieren.
+
+    Pipeline Plan → Retrieve → Assemble. Nutzt qwen2.5:14b für Plan, CLIP + DB
+    für Retrieval, und Heuristik oder qwen für Assemble. Segmente werden im
+    Stash 'last' gespeichert (kompatibel mit render_video / export_scenes).
+    """
+    from backend.core.timeline_generator import (
+        assemble_timeline as tg_assemble,
+        plan_timeline as tg_plan,
+        retrieve_candidates as tg_retrieve,
+        summarize_pool as tg_summarize_pool,
+        _log_stage,
+    )
+
+    prompt = (args.get("prompt") or "").strip()
+    if not prompt:
+        return {"error": "prompt fehlt (natürliche Beschreibung des gewünschten Cuts)"}
+    try:
+        duration_s = float(args.get("duration_s") or 60.0)
+    except (TypeError, ValueError):
+        return {"error": "duration_s muss eine Zahl sein"}
+    if duration_s < 3 or duration_s > 600:
+        return {"error": "duration_s muss zwischen 3 und 600 Sekunden liegen"}
+
+    raw_clip_ids = args.get("clip_ids") or []
+    if isinstance(raw_clip_ids, str):
+        raw_clip_ids = [raw_clip_ids]
+    raw_clip_ids = [str(x).strip() for x in raw_clip_ids if x]
+    is_wildcard = any(x in ("*", "all", "tous", "alle") for x in raw_clip_ids)
+    if raw_clip_ids and not is_wildcard:
+        pool_ids = await _resolve_clip_ids(db, raw_clip_ids)
+    else:
+        pool_ids = []
+    if not pool_ids:
+        r = await db.execute(select(Clip.id).where(Clip.status == "analysiert"))
+        pool_ids = [str(cid) for (cid,) in r.all()]
+    if not pool_ids:
+        return {"error": "keine analysierten Clips im Projekt"}
+
+    assemble_mode = args.get("assemble_mode") or "heuristic"
+    if assemble_mode not in ("heuristic", "llm"):
+        assemble_mode = "heuristic"
+    top_k = int(args.get("top_k") or 5)
+
+    run_id = f"agent_{int(time.time())}"
+
+    try:
+        pool_summary = await tg_summarize_pool(db, pool_ids)
+        _log_stage("00_pool_summary", pool_summary, run_id)
+
+        plan = await tg_plan(prompt, duration_s, args.get("num_slots_hint"),
+                             pool_summary=pool_summary)
+        _log_stage("01_plan", plan, run_id)
+
+        candidates = await tg_retrieve(plan, pool_ids, db, top_k=top_k)
+        _log_stage("02_candidates", candidates, run_id)
+
+        timeline = await tg_assemble(plan, candidates, mode=assemble_mode)
+        _log_stage("03_timeline", timeline, run_id)
+    except Exception as e:
+        logger.exception("generate_timeline_from_prompt failed")
+        return {"error": f"Pipeline-Fehler: {e}", "run_id": run_id}
+
+    segments = timeline["segments"]
+    if not segments:
+        return {
+            "error": "keine Segmente produziert (Retrieval hat für alle Slots leere Ergebnisse)",
+            "run_id": run_id,
+            "plan_summary": {
+                "narrative": plan.get("narrative_intent_de"),
+                "slot_count": len(plan.get("slots") or []),
+            },
+        }
+
+    await _stash_write("last", segments, db)
+    meta = timeline["_meta"]
+    return {
+        "run_id": run_id,
+        "narrative_intent_de": plan.get("narrative_intent_de"),
+        "slot_count": len(plan.get("slots") or []),
+        "segment_count": meta["segment_count"],
+        "total_duration_s": meta["total_duration_s"],
+        "target_duration_s": duration_s,
+        "skipped_slots": meta["skipped_slots"],
+        "assemble_mode": meta["mode"],
+        "segments_preview": segments[:5],
+        "stash_id": "last",
+        "log_dir": f"backend/outputs/timeline_gen_logs/{run_id}/",
+        "_hint": "Segmente im Stash 'last'. Weiter mit render_video / export_scenes / export_last_cleanup.",
+    }
+
+
 async def _tool_render_video(args: dict, db: AsyncSession) -> dict:
     """Rend un MP4 depuis des segments avec aspect ratio et optional subtitles burnt."""
     from backend.core.render import render_mp4, _srt_from_whisper_segments
@@ -1171,6 +1264,19 @@ TOOLS: dict[str, Tool] = {
             "quality_threshold": "float — 0.0-1.0, Mindest-Energie-Schwelle zur Aufnahme einer Szene",
         },
         handler=_tool_generate_rough_cut,
+    ),
+    "generate_timeline_from_prompt": Tool(
+        name="generate_timeline_from_prompt",
+        description="Generiert eine strukturierte Timeline aus einer natürlichen Beschreibung (Plan → Retrieve → Assemble). Der LLM plant zuerst narrative Slots (Einstellungen mit Framing, Dauer, Speaker-Bedarf), das System sucht dann für jeden Slot die passendsten Szenen via CLIP-Retrieval, und wählt/schneidet zusammen. Kern der wissenschaftlichen Arbeit — deutlich kontrollierbarer als generate_rough_cut. Segmente landen im Stash 'last' (weiter mit render_video / export_scenes).",
+        args_schema={
+            "prompt": "str — natürliche Beschreibung des gewünschten Cuts (DE/EN/FR)",
+            "duration_s": "float — Zieldauer in Sekunden (Default 60, Bereich 3-600)",
+            "clip_ids": "list[str] — zu nutzende Clips (Default: alle analysierten Clips)",
+            "num_slots_hint": "int — Richtwert für Anzahl Slots (optional, sonst automatisch)",
+            "top_k": "int — Anzahl Kandidaten pro Slot vor Auswahl (Default 5)",
+            "assemble_mode": "str — 'heuristic' (schnell, top-1 + Zentrum, Default) | 'llm' (qwen picke)",
+        },
+        handler=_tool_generate_timeline_from_prompt,
     ),
     "retranscribe_clip": Tool(
         name="retranscribe_clip",

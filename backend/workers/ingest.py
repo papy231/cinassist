@@ -783,44 +783,51 @@ def schritt_analyse_visuelle(video_pfad: str, szenen: list[dict], job_id: str) -
 # ═══════════════════════════════════════════════════════════
 
 def schritt_clip_embeddings(video_pfad: str, szenen: list[dict], job_id: str) -> list[list[float]]:
-    """Erzeugt CLIP-Embeddings für jede Szene (Mittelpunkt-Frame)."""
+    """Erzeugt CLIP-Embeddings für jede Szene — Mittelung mehrerer Frames.
+
+    Statt nur des Mittel-Frames werden CLIP_FRAMES Frames gleichmäßig innerhalb
+    der Szene abgetastet (z.B. 25/50/75 %) und ihre Embeddings gemittelt — robuster
+    gegen unrepräsentative Einzelframes und den absoluten Szenenanfang (Filmklappe).
+    Modell/Checkpoint kommen aus core/clip_encoder (identisch zur Textsuche).
+    """
     _update_job(job_id, "laeuft", 55, "Visuelle Embeddings werden erstellt (CLIP)...", schritt="clip")
 
     try:
-        import torch
-        import open_clip
-        from PIL import Image
+        from backend.core import clip_encoder
+        from backend.core.config import CLIP_FRAMES, CLIP_MODEL, CLIP_PRETRAINED
 
-        device = "mps" if torch.backends.mps.is_available() else "cpu"
-        model, _, preprocess = open_clip.create_model_and_transforms(CLIP_MODEL, pretrained="openai", device=device)
+        n_frames = max(1, int(CLIP_FRAMES))
+        # gleichmäßige Fraktionen im offenen Intervall (0,1): 3 → 0.25 / 0.5 / 0.75
+        fraktionen = [(k + 1) / (n_frames + 1) for k in range(n_frames)]
+        dim = clip_encoder.embed_dim()
 
-        embeddings = []
+        embeddings: list[list[float]] = []
         total = len(szenen)
 
         for i, szene in enumerate(szenen):
-            mitte = (szene["start_zeit"] + szene["end_zeit"]) / 2
+            start = float(szene["start_zeit"])
+            dauer = max(0.0, float(szene["end_zeit"]) - start)
 
-            # Frame per FFmpeg extrahieren
-            frame_pfad = TEMP_DIR / f"clip_frame_{uuid.uuid4().hex}.jpg"
-            cmd = [
-                FFMPEG_BIN, "-y",
-                "-ss", str(mitte),
-                "-i", video_pfad,
-                "-frames:v", "1",
-                "-q:v", "2",
-                str(frame_pfad),
-            ]
-            subprocess.run(cmd, capture_output=True, timeout=30)
+            frame_pfade = []
+            for fr in fraktionen:
+                t = start + dauer * fr
+                fp = TEMP_DIR / f"clip_frame_{uuid.uuid4().hex}.jpg"
+                subprocess.run(
+                    [FFMPEG_BIN, "-y", "-ss", str(t), "-i", video_pfad,
+                     "-frames:v", "1", "-q:v", "2", str(fp)],
+                    capture_output=True, timeout=30,
+                )
+                if fp.exists():
+                    frame_pfade.append(fp)
 
-            if frame_pfad.exists():
-                image = preprocess(Image.open(str(frame_pfad))).unsqueeze(0).to(device)
-                with torch.no_grad():
-                    embedding = model.encode_image(image)
-                    embedding = embedding / embedding.norm(dim=-1, keepdim=True)
-                    embeddings.append(embedding.cpu().squeeze().tolist())
-                frame_pfad.unlink()
-            else:
-                embeddings.append([0.0] * 512)
+            emb = clip_encoder.embed_images_mean(frame_pfade)
+            for fp in frame_pfade:
+                try:
+                    fp.unlink()
+                except OSError:
+                    pass
+
+            embeddings.append(emb.tolist() if emb is not None else [0.0] * dim)
 
             fortschritt = 55 + int((i + 1) / total * 20)
             _update_job(job_id, "laeuft", fortschritt, f"CLIP Embedding {i+1}/{total}...")
@@ -832,9 +839,10 @@ def schritt_clip_embeddings(video_pfad: str, szenen: list[dict], job_id: str) ->
             schritt_daten={
                 "embeddings": len(embeddings),
                 "embeddings_nonzero": nonzero,
-                "dimension": 512,
-                "modell": "ViT-B/32 (OpenAI, open_clip)",
-                "device": "mps" if (lambda: __import__('torch').backends.mps.is_available())() else "cpu",
+                "dimension": dim,
+                "frames_pro_szene": n_frames,
+                "modell": f"{CLIP_MODEL} / {CLIP_PRETRAINED} (open_clip)",
+                "device": clip_encoder.get_device(),
             },
         )
         return embeddings
@@ -846,7 +854,7 @@ def schritt_clip_embeddings(video_pfad: str, szenen: list[dict], job_id: str) ->
             schritt="clip",
             schritt_daten={"skipped": True, "reason": "open_clip/torch nicht installiert"},
         )
-        return [[0.0] * 512 for _ in szenen]
+        return [[] for _ in szenen]
 
 
 # ═══════════════════════════════════════════════════════════

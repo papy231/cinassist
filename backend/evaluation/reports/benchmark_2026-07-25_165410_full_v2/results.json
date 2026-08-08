@@ -1,0 +1,4705 @@
+[
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_short",
+        "prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "duration_s": 15,
+        "profile": "broll_nature",
+        "notes": "Court, doit filtrer wide_no_person, éviter dialogue accidentel"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 15,
+      "actual_duration_s": 19.12,
+      "duration_deviation_s": 4.12,
+      "duration_deviation_pct": 0.2747,
+      "n_segments": 4,
+      "unique_clips": 2,
+      "clip_diversity": 0.5,
+      "framing_distribution": {
+        "wide_no_person": 4
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.438,
+      "min_top1_score": 0.2816,
+      "max_top1_score": 0.5082,
+      "avg_top1_top2_gap": 0.0984,
+      "n_slots_planned": 4,
+      "n_slots_picked": 4,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "centered_default": 2,
+        "min_words_broll": 1,
+        "full_scene": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.4646,
+      "coverage_min": 0.3822,
+      "coverage_max": 0.6331,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6331
+        },
+        {
+          "slot_id": "2",
+          "score": 0.3822
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4143
+        },
+        {
+          "slot_id": "4",
+          "score": 0.429
+        }
+      ],
+      "wall_total_s": 73.64,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 69.75,
+      "wall_retrieve_s": 3.83,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_nature_short",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "Ruhige Naturaufnahmen von Wasser und Landschaft ohne menschliche Präsenz",
+      "target_duration_s": 15,
+      "planned_total_duration_s": 14.8,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild eines ruhigen Sees mit sanften Wellen im Sonnenlicht",
+          "intent_en": "wide shot of a calm lake with gentle waves in sunlight",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig, sanft"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkel-Bild eines Flusses mit grünen Uferbüschen",
+          "intent_en": "wide shot of a river with green bushes along the banks",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Beruhigend, friedlich"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkel-Bild eines Waldsees mit sanfter Brise und Wellen",
+          "intent_en": "wide shot of a forest lake with gentle breeze and waves",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Natürlich, entspannt"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Weitwinkel-Bild eines Bergsees mit reflektierendem Wasser und grünen Hügeln im Hintergrund",
+          "intent_en": "wide shot of a mountain lake with reflective water and green hills in the background",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Idyllisch, friedlich"
+        }
+      ],
+      "_meta": {
+        "wall_s": 69.75,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 4,
+      "total_duration_s": 19.12,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild eines ruhigen Sees mit sanften Wellen im Sonnenlicht",
+        "outcome": "picked",
+        "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+        "clip_name": "pexels_waves_17s.mp4",
+        "clip_score": 0.1803,
+        "text_score": 1.0,
+        "score": 0.5082,
+        "target_duration_s": 6.0,
+        "trim_start_in_scene_s": 5.88,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.242
+          },
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.2306
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkel-Bild eines Flusses mit grünen Uferbüschen",
+        "outcome": "picked",
+        "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.163,
+        "text_score": 1.0,
+        "score": 0.4978,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 1.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.4474
+          },
+          {
+            "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+            "score": 0.4226
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkel-Bild eines Waldsees mit sanfter Brise und Wellen",
+        "outcome": "picked",
+        "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1679,
+        "text_score": 0.4521,
+        "score": 0.2816,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 6.354,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "2d6493aa-ead3-429c-9372-19eea5c1d62d",
+            "score": 0.2812
+          },
+          {
+            "scene_id": "46da7589-5641-4524-bf25-5e472ab596c6",
+            "score": 0.2756
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Weitwinkel-Bild eines Bergsees mit reflektierendem Wasser und grünen Hügeln im Hintergrund",
+        "outcome": "picked",
+        "scene_id": "2d6493aa-ead3-429c-9372-19eea5c1d62d",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1069,
+        "text_score": 1.0,
+        "score": 0.4642,
+        "target_duration_s": 3.125,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+            "score": 0.3877
+          },
+          {
+            "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+            "score": 0.3636
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_60s",
+        "prompt": "60 Sekunden ruhige Naturstimmung, Weitwinkel-Landschaften mit sanftem Übergang, keine Menschen",
+        "duration_s": 60,
+        "profile": "broll_nature",
+        "notes": "Base test — reference pour la reg"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 60,
+      "actual_duration_s": 56.97,
+      "duration_deviation_s": 3.03,
+      "duration_deviation_pct": 0.0505,
+      "n_segments": 8,
+      "unique_clips": 6,
+      "clip_diversity": 0.75,
+      "framing_distribution": {
+        "wide_no_person": 8
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.3861,
+      "min_top1_score": 0.2395,
+      "max_top1_score": 0.5165,
+      "avg_top1_top2_gap": 0.046,
+      "n_slots_planned": 8,
+      "n_slots_picked": 8,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "min_words_broll": 2,
+        "centered_default": 3,
+        "full_scene": 3
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5075,
+      "coverage_min": 0.3917,
+      "coverage_max": 0.5964,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.5964
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5499
+        },
+        {
+          "slot_id": "3",
+          "score": 0.5376
+        },
+        {
+          "slot_id": "4",
+          "score": 0.4395
+        },
+        {
+          "slot_id": "5",
+          "score": 0.551
+        },
+        {
+          "slot_id": "6",
+          "score": 0.5901
+        },
+        {
+          "slot_id": "7",
+          "score": 0.3917
+        },
+        {
+          "slot_id": "8",
+          "score": 0.4034
+        }
+      ],
+      "wall_total_s": 96.91,
+      "wall_pool_summary_s": 0.06,
+      "wall_plan_s": 96.43,
+      "wall_retrieve_s": 0.41,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_nature_60s",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "60 Sekunden ruhige Naturstimmung, Weitwinkel-Landschaften mit sanftem Übergang, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "Eine ruhige und entspannte Naturstimmung durch weite Landschaftsbilder ohne Menschen",
+      "target_duration_s": 60,
+      "planned_total_duration_s": 59,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Etablierendes Weitwinkel-Bild einer ruhigen Berglandschaft am frühen Morgen",
+          "intent_en": "wide establishing shot of a serene mountain landscape in the early morning",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, atmosphärisch, sanft einleitend"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkel-Bild eines stillen Waldes mit dichtem Laubwerk",
+          "intent_en": "wide shot of a quiet forest with dense foliage",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Gelassen, ruhig, sanfte Farben"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkel-Bild eines stillen Flusses mit sanftem Nebel",
+          "intent_en": "wide shot of a tranquil river with gentle mist",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig, sanfte Farben"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Weitwinkel-Bild eines stillen Meeresstrandes mit Sonnenaufgang",
+          "intent_en": "wide shot of a quiet beach with sunrise",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, entspannt, sanfte Farben"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Weitwinkel-Bild eines stillen Bergsees mit sanfter Brise",
+          "intent_en": "wide shot of a tranquil mountain lake with gentle breeze",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Gelassen, ruhig, sanfte Farben"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Weitwinkel-Bild eines stillen Feldes mit blühenden Blumen",
+          "intent_en": "wide shot of a quiet field with blooming flowers",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, entspannt, sanfte Farben"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "Weitwinkel-Bild eines stillen Waldwegs mit dichtem Laubwerk",
+          "intent_en": "wide shot of a quiet forest path with dense foliage",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Gelassen, ruhig, sanfte Farben"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "Weitwinkel-Bild eines stillen Bergplateaus mit Sonnenaufgang",
+          "intent_en": "wide shot of a tranquil mountain plateau with sunrise",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, entspannt, sanfte Farben"
+        }
+      ],
+      "_meta": {
+        "wall_s": 96.43,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "60 Sekunden ruhige Naturstimmung, Weitwinkel-Landschaften mit sanftem Übergang, keine Menschen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 8,
+      "total_duration_s": 56.97,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Etablierendes Weitwinkel-Bild einer ruhigen Berglandschaft am frühen Morgen",
+        "outcome": "picked",
+        "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.2272,
+        "text_score": 0.5728,
+        "score": 0.3655,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 0.729,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3636
+          },
+          {
+            "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+            "score": 0.3304
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkel-Bild eines stillen Waldes mit dichtem Laubwerk",
+        "outcome": "picked",
+        "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1941,
+        "text_score": 1.0,
+        "score": 0.5165,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 4.854,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+            "score": 0.2413
+          },
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.2362
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkel-Bild eines stillen Flusses mit sanftem Nebel",
+        "outcome": "picked",
+        "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+        "clip_name": "pexels_waves_17s.mp4",
+        "clip_score": 0.1372,
+        "text_score": 0.8828,
+        "score": 0.4354,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 4.88,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+            "score": 0.4332
+          },
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.4309
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Weitwinkel-Bild eines stillen Meeresstrandes mit Sonnenaufgang",
+        "outcome": "picked",
+        "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+        "clip_name": "pexels_presenter_19s.mp4",
+        "clip_score": 0.0722,
+        "text_score": 0.9437,
+        "score": 0.4208,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 5.64,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.4139
+          },
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.3979
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Weitwinkel-Bild eines stillen Bergsees mit sanfter Brise",
+        "outcome": "picked",
+        "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1235,
+        "text_score": 0.9017,
+        "score": 0.4348,
+        "target_duration_s": 5.24,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.4176
+          },
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.4097
+          }
+        ]
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Weitwinkel-Bild eines stillen Feldes mit blühenden Blumen",
+        "outcome": "picked",
+        "scene_id": "2f92f9fd-87a3-4e04-8c4b-713738ecb0ec",
+        "clip_name": "bbb_middle.mp4",
+        "clip_score": 0.1841,
+        "text_score": 0.4183,
+        "score": 0.2778,
+        "target_duration_s": 6.208,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.2193
+          },
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.2184
+          }
+        ]
+      },
+      {
+        "slot_id": "7",
+        "intent_de": "Weitwinkel-Bild eines stillen Waldwegs mit dichtem Laubwerk",
+        "outcome": "picked",
+        "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.2042,
+        "text_score": 0.2926,
+        "score": 0.2395,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "1fc5072a-6505-42fa-93cf-1be15bde2d10",
+            "score": 0.2355
+          },
+          {
+            "scene_id": "4e23a2f7-1d96-4717-817d-16c7ff47f5e0",
+            "score": 0.2122
+          }
+        ]
+      },
+      {
+        "slot_id": "8",
+        "intent_de": "Weitwinkel-Bild eines stillen Bergplateaus mit Sonnenaufgang",
+        "outcome": "picked",
+        "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.0818,
+        "text_score": 0.8732,
+        "score": 0.3984,
+        "target_duration_s": 5.52,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.3966
+          },
+          {
+            "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+            "score": 0.3864
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_urban",
+        "prompt": "30 Sekunden Stadtbilder, Straßen und Gebäude aus der Distanz, kein Fokus auf Personen",
+        "duration_s": 30,
+        "profile": "broll_nature",
+        "notes": "Urbain plutôt que nature, pas beaucoup dans pool"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 30,
+      "actual_duration_s": 32.0,
+      "duration_deviation_s": 2.0,
+      "duration_deviation_pct": 0.0667,
+      "n_segments": 4,
+      "unique_clips": 4,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "wide_no_person": 4
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.4763,
+      "min_top1_score": 0.4432,
+      "max_top1_score": 0.5318,
+      "avg_top1_top2_gap": 0.0476,
+      "n_slots_planned": 4,
+      "n_slots_picked": 4,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "min_words_broll": 1,
+        "centered_default": 3
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5378,
+      "coverage_min": 0.4814,
+      "coverage_max": 0.6145,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6145
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5055
+        },
+        {
+          "slot_id": "3",
+          "score": 0.5501
+        },
+        {
+          "slot_id": "4",
+          "score": 0.4814
+        }
+      ],
+      "wall_total_s": 51.88,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 51.43,
+      "wall_retrieve_s": 0.42,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_urban",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "30 Sekunden Stadtbilder, Straßen und Gebäude aus der Distanz, kein Fokus auf Personen"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein kurzer Stadtspaziergang durch verschiedene Teile einer großen Stadt",
+      "target_duration_s": 30,
+      "planned_total_duration_s": 29,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkelansicht von hohen Gebäuden und breiten Straßen in der Innenstadt",
+          "intent_en": "wide shot of tall buildings and wide streets in the city center",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Geben Sie einen allgemeinen Eindruck von der Stadt"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkelansicht eines belebten Marktplatzes mit vielen Geschäften",
+          "intent_en": "wide shot of a bustling market square with many shops",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Verdeutlichen Sie die Vielfalt der Stadt"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkelansicht eines breiten Flusses mit Brücken und Uferpromenaden",
+          "intent_en": "wide shot of a wide river with bridges and waterfront promenades",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Erweitern Sie die visuelle Palette"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Weitwinkelansicht eines Parks mit breiten Wegen und Grünflächen",
+          "intent_en": "wide shot of a park with wide paths and green areas",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Geben Sie den Ruhepunkten der Stadt Raum"
+        }
+      ],
+      "_meta": {
+        "wall_s": 51.43,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "30 Sekunden Stadtbilder, Straßen und Gebäude aus der Distanz, kein Fokus auf Personen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 4,
+      "total_duration_s": 32.0,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkelansicht von hohen Gebäuden und breiten Straßen in der Innenstadt",
+        "outcome": "picked",
+        "scene_id": "c858b681-501c-48be-a363-9ff445986977",
+        "clip_name": "pexels_street_86s.mp4",
+        "clip_score": 0.2197,
+        "text_score": 1.0,
+        "score": 0.5318,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 39.253,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.3876
+          },
+          {
+            "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+            "score": 0.3683
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkelansicht eines belebten Marktplatzes mit vielen Geschäften",
+        "outcome": "picked",
+        "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+        "clip_name": "pexels_presenter_19s.mp4",
+        "clip_score": 0.1096,
+        "text_score": 0.9437,
+        "score": 0.4432,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 5.64,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.4361
+          },
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.4361
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkelansicht eines breiten Flusses mit Brücken und Uferpromenaden",
+        "outcome": "picked",
+        "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+        "clip_name": "pexels_waves_17s.mp4",
+        "clip_score": 0.1402,
+        "text_score": 0.9186,
+        "score": 0.4516,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 4.88,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.4483
+          },
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.444
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Weitwinkelansicht eines Parks mit breiten Wegen und Grünflächen",
+        "outcome": "picked",
+        "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1724,
+        "text_score": 0.9381,
+        "score": 0.4787,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 4.854,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+            "score": 0.4428
+          },
+          {
+            "scene_id": "2f92f9fd-87a3-4e04-8c4b-713738ecb0ec",
+            "score": 0.3375
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_water_calm",
+        "prompt": "20 Sekunden ruhige Wasseraufnahmen: Wellen, Fluss, See — meditativ, keine Menschen",
+        "duration_s": 20,
+        "profile": "broll_nature",
+        "notes": "Force le retrieve à trouver pexels_waves + water scenes"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 20,
+      "actual_duration_s": 21.8,
+      "duration_deviation_s": 1.8,
+      "duration_deviation_pct": 0.09,
+      "n_segments": 4,
+      "unique_clips": 4,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "wide_no_person": 2,
+        "closeup": 2
+      },
+      "framing_entropy": 1.0,
+      "avg_top1_score": 0.3992,
+      "min_top1_score": 0.2567,
+      "max_top1_score": 0.4911,
+      "avg_top1_top2_gap": 0.0763,
+      "n_slots_planned": 4,
+      "n_slots_picked": 4,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "centered_default": 2,
+        "min_words_broll": 1,
+        "full_scene": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.4972,
+      "coverage_min": 0.3092,
+      "coverage_max": 0.6442,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6442
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5689
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4666
+        },
+        {
+          "slot_id": "4",
+          "score": 0.3092
+        }
+      ],
+      "wall_total_s": 47.91,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 47.52,
+      "wall_retrieve_s": 0.37,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_water_calm",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "20 Sekunden ruhige Wasseraufnahmen: Wellen, Fluss, See — meditativ, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "Ruhige Wasseraufnahmen ohne menschliche Präsenz",
+      "target_duration_s": 20,
+      "planned_total_duration_s": 19.5,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild eines ruhigen Sees mit sanften Wellenbewegungen",
+          "intent_en": "wide shot of a calm lake with gentle wave movements",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Detaillierte Aufnahme von Wellen auf einem Fluss",
+          "intent_en": "closeup of waves on a river",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Meditativ, detailorientiert"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkel-Bild von Wellen an einem Strand mit sanftem Hintergrund",
+          "intent_en": "wide shot of waves on a beach with soft background",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, entspannt"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Detaillierte Aufnahme von Wellenbewegungen auf einem See",
+          "intent_en": "closeup of wave movements on a lake",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Meditativ, detailreich"
+        }
+      ],
+      "_meta": {
+        "wall_s": 47.52,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "20 Sekunden ruhige Wasseraufnahmen: Wellen, Fluss, See — meditativ, keine Menschen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 4,
+      "total_duration_s": 21.8,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild eines ruhigen Sees mit sanften Wellenbewegungen",
+        "outcome": "picked",
+        "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+        "clip_name": "pexels_waves_17s.mp4",
+        "clip_score": 0.2166,
+        "text_score": 0.8828,
+        "score": 0.4831,
+        "target_duration_s": 6.0,
+        "trim_start_in_scene_s": 5.88,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+            "score": 0.4612
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.4536
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Detaillierte Aufnahme von Wellen auf einem Fluss",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.1784,
+        "text_score": 0.3742,
+        "score": 0.2567,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 17.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.221
+          },
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.2153
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkel-Bild von Wellen an einem Strand mit sanftem Hintergrund",
+        "outcome": "picked",
+        "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+        "clip_name": "pexels_presenter_19s.mp4",
+        "clip_score": 0.0849,
+        "text_score": 0.788,
+        "score": 0.3661,
+        "target_duration_s": 6.0,
+        "trim_start_in_scene_s": 6.64,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+            "score": 0.3274
+          },
+          {
+            "scene_id": "1fc5072a-6505-42fa-93cf-1be15bde2d10",
+            "score": 0.3242
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Detaillierte Aufnahme von Wellenbewegungen auf einem See",
+        "outcome": "picked",
+        "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1751,
+        "text_score": 0.9652,
+        "score": 0.4911,
+        "target_duration_s": 4.8,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.2821
+          },
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2214
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_energy_dynamic",
+        "prompt": "25 Sekunden dynamische Actionszenen, schnelle Bewegung, energische Weitwinkel-Bilder",
+        "duration_s": 25,
+        "profile": "broll_nature",
+        "notes": "Test discrimination CLIP action vs ruhig"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 25,
+      "actual_duration_s": 26.5,
+      "duration_deviation_s": 1.5,
+      "duration_deviation_pct": 0.06,
+      "n_segments": 5,
+      "unique_clips": 4,
+      "clip_diversity": 0.8,
+      "framing_distribution": {
+        "wide_no_person": 1,
+        "medium": 3,
+        "wide_with_person": 1
+      },
+      "framing_entropy": 1.371,
+      "avg_top1_score": 0.3186,
+      "min_top1_score": 0.1197,
+      "max_top1_score": 0.4601,
+      "avg_top1_top2_gap": 0.0551,
+      "n_slots_planned": 6,
+      "n_slots_picked": 5,
+      "n_slots_skipped": 1,
+      "skipped_ratio": 0.1667,
+      "trim_strategy_distribution": {
+        "full_scene": 2,
+        "min_words_broll": 2,
+        "centered_default": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5107,
+      "coverage_min": 0.2736,
+      "coverage_max": 0.6531,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.2736
+        },
+        {
+          "slot_id": "2",
+          "score": 0.575
+        },
+        {
+          "slot_id": "3",
+          "score": 0.6285
+        },
+        {
+          "slot_id": "4",
+          "score": 0.4234
+        },
+        {
+          "slot_id": "6",
+          "score": 0.6531
+        }
+      ],
+      "wall_total_s": 74.03,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 72.26,
+      "wall_retrieve_s": 1.75,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "broll_energy_dynamic",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "25 Sekunden dynamische Actionszenen, schnelle Bewegung, energische Weitwinkel-Bilder"
+    },
+    "plan": {
+      "narrative_intent_de": "Dynamisches, bewegtes Einstiegsbild mit schnellen Wechseln von Weitwinkel-Aufnahmen",
+      "target_duration_s": 25,
+      "planned_total_duration_s": 24.8,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkelaufnahme einer leeren Küche am frühen Morgen mit sanfter Bewegung",
+          "intent_en": "wide establishing shot of an empty kitchen in the early morning with subtle movement",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhiges Einstieg, atmosphärisch"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Schnelle Bewegung von einer Person, die durch eine Küche läuft",
+          "intent_en": "fast motion of a person running through the kitchen",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "medium",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Energisch, dynamisch"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkelaufnahme von Menschen beim Frühstück mit lebendigem Hintergrund",
+          "intent_en": "wide shot of people having breakfast with a lively background",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebendig, farbenfroh"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Schnelle Bewegung von einer Person, die Teller abräumt",
+          "intent_en": "fast motion of a person clearing dishes",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "medium",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Energisch, dynamisch"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Weitwinkelaufnahme von Menschen beim Kochen mit lebendigem Hintergrund",
+          "intent_en": "wide shot of people cooking with a lively background",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebendig, farbenfroh"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Schnelle Bewegung von einer Person, die eine Tasse Kaffee holt",
+          "intent_en": "fast motion of a person getting a cup of coffee",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "medium",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Energisch, dynamisch"
+        }
+      ],
+      "_meta": {
+        "wall_s": 72.26,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "25 Sekunden dynamische Actionszenen, schnelle Bewegung, energische Weitwinkel-Bilder",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 5,
+      "total_duration_s": 26.5,
+      "skipped_slots": 1,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkelaufnahme einer leeren Küche am frühen Morgen mit sanfter Bewegung",
+        "outcome": "picked",
+        "scene_id": "1fc5072a-6505-42fa-93cf-1be15bde2d10",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.1496,
+        "text_score": 0.9258,
+        "score": 0.4601,
+        "target_duration_s": 5.542,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+            "score": 0.4568
+          },
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.3942
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Schnelle Bewegung von einer Person, die durch eine Küche läuft",
+        "outcome": "picked",
+        "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.181,
+        "text_score": 0.6537,
+        "score": 0.3701,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 3.4,
+        "trim_strategy": "min_words_broll",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "9e4bd216-9f27-416d-b208-ee1b80a47873",
+            "score": 0.2724
+          },
+          {
+            "scene_id": "7b2b6d59-85c7-4ad0-8e87-e69e9846a630",
+            "score": 0.2631
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkelaufnahme von Menschen beim Frühstück mit lebendigem Hintergrund",
+        "outcome": "picked",
+        "scene_id": "8cc3d7b9-a119-4a6c-88f6-f36ec61ea833",
+        "clip_name": "bbb_middle.mp4",
+        "clip_score": 0.1996,
+        "text_score": 0.0,
+        "score": 0.1197,
+        "target_duration_s": 5.958,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_with_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Schnelle Bewegung von einer Person, die Teller abräumt",
+        "outcome": "picked",
+        "scene_id": "9e4bd216-9f27-416d-b208-ee1b80a47873",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1827,
+        "text_score": 0.3424,
+        "score": 0.2466,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 0.81,
+        "trim_strategy": "min_words_broll",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "7b2b6d59-85c7-4ad0-8e87-e69e9846a630",
+            "score": 0.2344
+          },
+          {
+            "scene_id": "5882f223-d996-46f8-8580-e258db1286a7",
+            "score": 0.2236
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Weitwinkelaufnahme von Menschen beim Kochen mit lebendigem Hintergrund",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Schnelle Bewegung von einer Person, die eine Tasse Kaffee holt",
+        "outcome": "picked",
+        "scene_id": "f9b321c4-0e79-4115-965d-eb8ca17946bf",
+        "clip_name": "pexels_2people_23s.mp4",
+        "clip_score": 0.2181,
+        "text_score": 0.6641,
+        "score": 0.3965,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 9.021,
+        "trim_strategy": "centered_default",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "7b2b6d59-85c7-4ad0-8e87-e69e9846a630",
+            "score": 0.2895
+          },
+          {
+            "scene_id": "5882f223-d996-46f8-8580-e258db1286a7",
+            "score": 0.2753
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "interview_40s_closeup",
+        "prompt": "40 Sekunden Interview-Ausschnitt: Sprecher redet in Nahaufnahmen und Halbtotalen, kein B-Roll",
+        "duration_s": 40,
+        "profile": "interview",
+        "notes": "Full dialog, doit prioriser closeup/medium, max_words_dialogue trim"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 40,
+      "actual_duration_s": 40.52,
+      "duration_deviation_s": 0.52,
+      "duration_deviation_pct": 0.013,
+      "n_segments": 6,
+      "unique_clips": 2,
+      "clip_diversity": 0.3333,
+      "framing_distribution": {
+        "closeup": 3,
+        "medium": 3
+      },
+      "framing_entropy": 1.0,
+      "avg_top1_score": 0.2146,
+      "min_top1_score": 0.1338,
+      "max_top1_score": 0.2744,
+      "avg_top1_top2_gap": 0.0273,
+      "n_slots_planned": 6,
+      "n_slots_picked": 6,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "max_words_dialogue": 5,
+        "full_scene": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": 1.0,
+      "n_speaker_constrained": 6,
+      "n_dialogue_constrained": 6,
+      "coverage_mean": 0.5573,
+      "coverage_min": 0.4843,
+      "coverage_max": 0.6082,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6082
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5571
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4843
+        },
+        {
+          "slot_id": "4",
+          "score": 0.5523
+        },
+        {
+          "slot_id": "5",
+          "score": 0.6068
+        },
+        {
+          "slot_id": "6",
+          "score": 0.5352
+        }
+      ],
+      "wall_total_s": 74.56,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 74.13,
+      "wall_retrieve_s": 0.4,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "interview_40s_closeup",
+      "profile": "interview",
+      "assemble_mode": "heuristic",
+      "prompt_text": "40 Sekunden Interview-Ausschnitt: Sprecher redet in Nahaufnahmen und Halbtotalen, kein B-Roll"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein kurzes Interview mit einer Person, das sich auf Nahaufnahmen und Halbtotalen konzentriert.",
+      "target_duration_s": 40,
+      "planned_total_duration_s": 39,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Nahaufnahme von SPEAKER_00, der ernsthaft über ein Thema spricht",
+          "intent_en": "closeup of SPEAKER_00 speaking seriously about a topic",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, emotionsgeladen"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Halbtotal von SPEAKER_00 in einem Büro mit Blick auf den Computerbildschirm",
+          "intent_en": "medium shot of SPEAKER_00 at a desk with computer screen visible",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Beruhigend, professionell"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Nahaufnahme von SPEAKER_00, der lächelt und eine wichtige Information teilt",
+          "intent_en": "closeup of SPEAKER_00 smiling and sharing an important piece of information",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Engagiert, positiv"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Halbtotal von SPEAKER_00 in einem Büro mit Blick auf Papiere und Notizen",
+          "intent_en": "medium shot of SPEAKER_00 at a desk with papers and notes visible",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Organisiert, reflektierend"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Nahaufnahme von SPEAKER_00, der nachdenklich eine Pause macht",
+          "intent_en": "closeup of SPEAKER_00 pausing thoughtfully",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Nachdenklich, ruhig"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Halbtotal von SPEAKER_00 in einem Büro mit Blick auf den Raum",
+          "intent_en": "medium shot of SPEAKER_00 at a desk with view into the room",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Überblick, entspannt"
+        }
+      ],
+      "_meta": {
+        "wall_s": 74.13,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "40 Sekunden Interview-Ausschnitt: Sprecher redet in Nahaufnahmen und Halbtotalen, kein B-Roll",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 6,
+      "total_duration_s": 40.52,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Nahaufnahme von SPEAKER_00, der ernsthaft über ein Thema spricht",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.2113,
+        "text_score": 0.1876,
+        "score": 0.2018,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 6.5,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.1655
+          },
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.1559
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Halbtotal von SPEAKER_00 in einem Büro mit Blick auf den Computerbildschirm",
+        "outcome": "picked",
+        "scene_id": "d31f0058-a675-41f5-8c8c-ebe43af0cd33",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1731,
+        "text_score": 0.3685,
+        "score": 0.2512,
+        "target_duration_s": 5.52,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+            "score": 0.2366
+          },
+          {
+            "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+            "score": 0.2356
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Nahaufnahme von SPEAKER_00, der lächelt und eine wichtige Information teilt",
+        "outcome": "picked",
+        "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1598,
+        "text_score": 0.2146,
+        "score": 0.1817,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 4.85,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.1488
+          },
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.127
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Halbtotal von SPEAKER_00 in einem Büro mit Blick auf Papiere und Notizen",
+        "outcome": "picked",
+        "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1589,
+        "text_score": 0.3737,
+        "score": 0.2448,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.5,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+            "score": 0.2438
+          },
+          {
+            "scene_id": "0c4dbaf8-010f-4d49-b6db-1c43457b7bd5",
+            "score": 0.2414
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Nahaufnahme von SPEAKER_00, der nachdenklich eine Pause macht",
+        "outcome": "picked",
+        "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1825,
+        "text_score": 0.0608,
+        "score": 0.1338,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.13,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.1176
+          }
+        ]
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Halbtotal von SPEAKER_00 in einem Büro mit Blick auf den Raum",
+        "outcome": "picked",
+        "scene_id": "0c4dbaf8-010f-4d49-b6db-1c43457b7bd5",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.144,
+        "text_score": 0.4702,
+        "score": 0.2744,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.53,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "932972ac-491e-4521-8490-c364445201cb",
+            "score": 0.2113
+          },
+          {
+            "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+            "score": 0.2048
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "interview_60s_serious",
+        "prompt": "60 Sekunden ernstes Gespräch eines Sprechers direkt in die Kamera, ausschliesslich Nahaufnahmen",
+        "duration_s": 60,
+        "profile": "interview",
+        "notes": "Contrainte framing dure closeup"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 60,
+      "actual_duration_s": 25.8,
+      "duration_deviation_s": 34.2,
+      "duration_deviation_pct": 0.57,
+      "n_segments": 4,
+      "unique_clips": 2,
+      "clip_diversity": 0.5,
+      "framing_distribution": {
+        "closeup": 4
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.301,
+      "min_top1_score": 0.1699,
+      "max_top1_score": 0.4398,
+      "avg_top1_top2_gap": 0.0851,
+      "n_slots_planned": 15,
+      "n_slots_picked": 4,
+      "n_slots_skipped": 11,
+      "skipped_ratio": 0.7333,
+      "trim_strategy_distribution": {
+        "max_words_dialogue": 3,
+        "full_scene": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": 1.0,
+      "n_speaker_constrained": 4,
+      "n_dialogue_constrained": 4,
+      "coverage_mean": 0.5574,
+      "coverage_min": 0.4141,
+      "coverage_max": 0.6694,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6694
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5914
+        },
+        {
+          "slot_id": "3",
+          "score": 0.5545
+        },
+        {
+          "slot_id": "4",
+          "score": 0.4141
+        }
+      ],
+      "wall_total_s": 186.61,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 186.09,
+      "wall_retrieve_s": 0.49,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "interview_60s_serious",
+      "profile": "interview",
+      "assemble_mode": "heuristic",
+      "prompt_text": "60 Sekunden ernstes Gespräch eines Sprechers direkt in die Kamera, ausschliesslich Nahaufnahmen"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein ernsthaftes und konzentriertes Gespräch mit direktem Blick ins Objektiv",
+      "target_duration_s": 60,
+      "planned_total_duration_s": 59,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Nahaufnahme des Sprechers, der direkt in die Kamera schaut und ernsthaft spricht",
+          "intent_en": "Close-up of the speaker looking directly into the camera and speaking seriously",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, direkter Blick ins Objektiv"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Nahaufnahme des Sprechers im Profil, der ernsthaft spricht",
+          "intent_en": "Close-up of the speaker in profile speaking seriously",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+          "intent_en": "Close-up of the speaker from the side with the camera out of frame",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+          "intent_en": "Close-up of the speaker in frontal shot looking thoughtful",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Nachdenklich, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+          "intent_en": "Close-up of the speaker in profile looking into the camera",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+          "intent_en": "Close-up of the speaker from the side with the camera out of frame",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+          "intent_en": "Close-up of the speaker in frontal shot looking thoughtful",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Nachdenklich, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+          "intent_en": "Close-up of the speaker in profile looking into the camera",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 9,
+          "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+          "intent_en": "Close-up of the speaker from the side with the camera out of frame",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 10,
+          "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+          "intent_en": "Close-up of the speaker in frontal shot looking thoughtful",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Nachdenklich, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 11,
+          "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+          "intent_en": "Close-up of the speaker in profile looking into the camera",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 12,
+          "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+          "intent_en": "Close-up of the speaker from the side with the camera out of frame",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 13,
+          "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+          "intent_en": "Close-up of the speaker in frontal shot looking thoughtful",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Nachdenklich, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 14,
+          "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+          "intent_en": "Close-up of the speaker in profile looking into the camera",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        },
+        {
+          "slot_id": 15,
+          "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+          "intent_en": "Close-up of the speaker from the side with the camera out of frame",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, ernstes Gesichtsausdruck"
+        }
+      ],
+      "_meta": {
+        "wall_s": 186.09,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "60 Sekunden ernstes Gespräch eines Sprechers direkt in die Kamera, ausschliesslich Nahaufnahmen",
+        "pool_aware": true
+      },
+      "_validation_warnings": [
+        "total mid-duration (82.5s) deviates 38% from target (60s)"
+      ]
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 4,
+      "total_duration_s": 25.8,
+      "skipped_slots": 11,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Nahaufnahme des Sprechers, der direkt in die Kamera schaut und ernsthaft spricht",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.2708,
+        "text_score": 0.4474,
+        "score": 0.3415,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 6.5,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.304
+          },
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.2503
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Nahaufnahme des Sprechers im Profil, der ernsthaft spricht",
+        "outcome": "picked",
+        "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2152,
+        "text_score": 0.3089,
+        "score": 0.2527,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.13,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2483
+          },
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.1874
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+        "outcome": "picked",
+        "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1968,
+        "text_score": 0.8045,
+        "score": 0.4398,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 4.85,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.2265
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+        "outcome": "picked",
+        "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2079,
+        "text_score": 0.1129,
+        "score": 0.1699,
+        "target_duration_s": 4.8,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "closeup",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "7",
+        "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "8",
+        "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "9",
+        "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "10",
+        "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "11",
+        "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "12",
+        "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "13",
+        "intent_de": "Nahaufnahme des Sprechers im Frontalanschnitt, der nachdenklich aussieht",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "14",
+        "intent_de": "Nahaufnahme des Sprechers im Profil, der in die Kamera schaut",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "15",
+        "intent_de": "Nahaufnahme des Sprechers von der Seite, die Kamera ist außerhalb des Bildes",
+        "outcome": "skipped_no_candidate"
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "interview_broll_mix",
+        "prompt": "45 Sekunden: Sprecher erklärt seine Arbeit (Nahaufnahmen), dazwischen kurze B-Roll seiner Umgebung als Illustration",
+        "duration_s": 45,
+        "profile": "interview",
+        "notes": "Alternance A-roll/B-roll — testé au tout début, référence"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 45,
+      "actual_duration_s": 46.8,
+      "duration_deviation_s": 1.8,
+      "duration_deviation_pct": 0.04,
+      "n_segments": 8,
+      "unique_clips": 4,
+      "clip_diversity": 0.5,
+      "framing_distribution": {
+        "closeup": 4,
+        "wide_no_person": 2,
+        "medium": 1,
+        "wide_with_person": 1
+      },
+      "framing_entropy": 1.75,
+      "avg_top1_score": 0.2933,
+      "min_top1_score": 0.0871,
+      "max_top1_score": 0.5211,
+      "avg_top1_top2_gap": 0.0729,
+      "n_slots_planned": 8,
+      "n_slots_picked": 8,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "max_words_dialogue": 3,
+        "min_words_broll": 3,
+        "full_scene": 1,
+        "centered_default": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": 1.0,
+      "n_speaker_constrained": 4,
+      "n_dialogue_constrained": 4,
+      "coverage_mean": 0.5446,
+      "coverage_min": 0.4116,
+      "coverage_max": 0.6901,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.628
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5875
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4313
+        },
+        {
+          "slot_id": "4",
+          "score": 0.4514
+        },
+        {
+          "slot_id": "5",
+          "score": 0.5225
+        },
+        {
+          "slot_id": "6",
+          "score": 0.6901
+        },
+        {
+          "slot_id": "7",
+          "score": 0.6344
+        },
+        {
+          "slot_id": "8",
+          "score": 0.4116
+        }
+      ],
+      "wall_total_s": 93.72,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 93.24,
+      "wall_retrieve_s": 0.45,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "interview_broll_mix",
+      "profile": "interview",
+      "assemble_mode": "heuristic",
+      "prompt_text": "45 Sekunden: Sprecher erklärt seine Arbeit (Nahaufnahmen), dazwischen kurze B-Roll seiner Umgebung als Illustration"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein Sprecher erklärt seine tägliche Routine und Arbeit, unterbrochen von kurzen visuellen Schnitten der Umgebung",
+      "target_duration_s": 45,
+      "planned_total_duration_s": 43.75,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Sprecher in Nahaufnahme, erklärt seine Arbeit am Morgen",
+          "intent_en": "Speaker in a close-up shot explaining his morning routine and work",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, klar und verständlich"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "B-Roll: Weitwinkelansicht des Arbeitsplatzes ohne Person",
+          "intent_en": "B-roll wide shot of the workplace without a person",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Sprecher in Nahaufnahme, erklärt wichtige Arbeitsschritte",
+          "intent_en": "Speaker in a close-up shot explaining important work steps",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Detailorientiert, engagiert"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "B-Roll: Mittellaufnahme von Arbeitsmaterialien auf dem Tisch",
+          "intent_en": "B-roll medium shot of work materials on the desk",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "medium",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Gut sichtbar, ordentlich"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Sprecher in Nahaufnahme, spricht über seine Ziele",
+          "intent_en": "Speaker in a close-up shot speaking about his goals",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Motiviert, optimistisch"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "B-Roll: Weitwinkelansicht der Arbeitsumgebung mit Person",
+          "intent_en": "B-roll wide shot of the work environment with a person",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Überblick, gut sichtbar"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "Sprecher in Nahaufnahme, schließt seine Erklärung ab",
+          "intent_en": "Speaker in a close-up shot concluding his explanation",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Zufrieden, zufriedend"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "B-Roll: Weitwinkelansicht des Arbeitsplatzes ohne Person",
+          "intent_en": "B-roll wide shot of the workplace without a person",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, abschließend"
+        }
+      ],
+      "_meta": {
+        "wall_s": 93.24,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "45 Sekunden: Sprecher erklärt seine Arbeit (Nahaufnahmen), dazwischen kurze B-Roll seiner Umgebung als Illustration",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 8,
+      "total_duration_s": 46.8,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Sprecher in Nahaufnahme, erklärt seine Arbeit am Morgen",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.2347,
+        "text_score": 0.6367,
+        "score": 0.3955,
+        "target_duration_s": 8.0,
+        "trim_start_in_scene_s": 6.11,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.2982
+          },
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2744
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "B-Roll: Weitwinkelansicht des Arbeitsplatzes ohne Person",
+        "outcome": "picked",
+        "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2018,
+        "text_score": 1.0,
+        "score": 0.5211,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 0.12,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+            "score": 0.245
+          },
+          {
+            "scene_id": "a5e81add-6a91-47a2-b2aa-615d6f35d968",
+            "score": 0.2338
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Sprecher in Nahaufnahme, erklärt wichtige Arbeitsschritte",
+        "outcome": "picked",
+        "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.244,
+        "text_score": 0.275,
+        "score": 0.2564,
+        "target_duration_s": 4.8,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2197
+          },
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.2047
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "B-Roll: Mittellaufnahme von Arbeitsmaterialien auf dem Tisch",
+        "outcome": "picked",
+        "scene_id": "0c4dbaf8-010f-4d49-b6db-1c43457b7bd5",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.0993,
+        "text_score": 0.9068,
+        "score": 0.4223,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 5.68,
+        "trim_strategy": "min_words_broll",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "f9b321c4-0e79-4115-965d-eb8ca17946bf",
+            "score": 0.418
+          },
+          {
+            "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+            "score": 0.4056
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Sprecher in Nahaufnahme, spricht über seine Ziele",
+        "outcome": "picked",
+        "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2069,
+        "text_score": 0.2139,
+        "score": 0.2097,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 4.85,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.198
+          }
+        ]
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "B-Roll: Weitwinkelansicht der Arbeitsumgebung mit Person",
+        "outcome": "picked",
+        "scene_id": "8cc3d7b9-a119-4a6c-88f6-f36ec61ea833",
+        "clip_name": "bbb_middle.mp4",
+        "clip_score": 0.1451,
+        "text_score": 0.0,
+        "score": 0.0871,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 0.479,
+        "trim_strategy": "centered_default",
+        "framing": "wide_with_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "7",
+        "intent_de": "Sprecher in Nahaufnahme, schließt seine Erklärung ab",
+        "outcome": "picked",
+        "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2241,
+        "text_score": 0.1879,
+        "score": 0.2096,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.13,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "8",
+        "intent_de": "B-Roll: Weitwinkelansicht des Arbeitsplatzes ohne Person",
+        "outcome": "picked",
+        "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.1689,
+        "text_score": 0.3591,
+        "score": 0.245,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 2.229,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "a5e81add-6a91-47a2-b2aa-615d6f35d968",
+            "score": 0.2338
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.2332
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "interview_short",
+        "prompt": "15 Sekunden Statement einer Person, Nahaufnahme, klare Aussage",
+        "duration_s": 15,
+        "profile": "interview",
+        "notes": "Cut court avec fort besoin dialogue"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 15,
+      "actual_duration_s": 15.0,
+      "duration_deviation_s": 0.0,
+      "duration_deviation_pct": 0.0,
+      "n_segments": 1,
+      "unique_clips": 1,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "closeup": 1
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.2796,
+      "min_top1_score": 0.2796,
+      "max_top1_score": 0.2796,
+      "avg_top1_top2_gap": 0.0132,
+      "n_slots_planned": 1,
+      "n_slots_picked": 1,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "max_words_dialogue": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": 1.0,
+      "n_speaker_constrained": 1,
+      "n_dialogue_constrained": 1,
+      "coverage_mean": 0.6354,
+      "coverage_min": 0.6354,
+      "coverage_max": 0.6354,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6354
+        }
+      ],
+      "wall_total_s": 18.01,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 17.56,
+      "wall_retrieve_s": 0.41,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "interview_short",
+      "profile": "interview",
+      "assemble_mode": "heuristic",
+      "prompt_text": "15 Sekunden Statement einer Person, Nahaufnahme, klare Aussage"
+    },
+    "plan": {
+      "narrative_intent_de": "Kurzer Satz zum Gesamtbogen des Cuts",
+      "target_duration_s": 15,
+      "planned_total_duration_s": 14.8,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Nahaufnahme einer Person, die eine klare Aussage macht",
+          "intent_en": "closeup of a person making a clear statement",
+          "duration_min_s": 13.0,
+          "duration_max_s": 15.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert, direkter Blick in die Kamera"
+        }
+      ],
+      "_meta": {
+        "wall_s": 17.56,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "15 Sekunden Statement einer Person, Nahaufnahme, klare Aussage",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 1,
+      "total_duration_s": 15.0,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Nahaufnahme einer Person, die eine klare Aussage macht",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.2588,
+        "text_score": 0.3107,
+        "score": 0.2796,
+        "target_duration_s": 15.0,
+        "trim_start_in_scene_s": 22.27,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2664
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "interview_multi_speaker",
+        "prompt": "50 Sekunden Diskussion mit mehreren Sprechern im Wechsel, Halbtotalen bevorzugt",
+        "duration_s": 50,
+        "profile": "interview",
+        "notes": "Multi-speaker — tests si retriever varie la source"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 50,
+      "actual_duration_s": 38.96,
+      "duration_deviation_s": 11.04,
+      "duration_deviation_pct": 0.2208,
+      "n_segments": 6,
+      "unique_clips": 1,
+      "clip_diversity": 0.1667,
+      "framing_distribution": {
+        "medium": 6
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.2649,
+      "min_top1_score": 0.2449,
+      "max_top1_score": 0.3009,
+      "avg_top1_top2_gap": 0.0185,
+      "n_slots_planned": 9,
+      "n_slots_picked": 6,
+      "n_slots_skipped": 3,
+      "skipped_ratio": 0.3333,
+      "trim_strategy_distribution": {
+        "max_words_dialogue": 5,
+        "full_scene": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": 1.0,
+      "n_speaker_constrained": 6,
+      "n_dialogue_constrained": 6,
+      "coverage_mean": 0.477,
+      "coverage_min": 0.3851,
+      "coverage_max": 0.6336,
+      "coverage_per_slot": [
+        {
+          "slot_id": "2",
+          "score": 0.4545
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4873
+        },
+        {
+          "slot_id": "5",
+          "score": 0.6336
+        },
+        {
+          "slot_id": "6",
+          "score": 0.3851
+        },
+        {
+          "slot_id": "8",
+          "score": 0.5104
+        },
+        {
+          "slot_id": "9",
+          "score": 0.3914
+        }
+      ],
+      "wall_total_s": 103.31,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 102.8,
+      "wall_retrieve_s": 0.49,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "interview_multi_speaker",
+      "profile": "interview",
+      "assemble_mode": "heuristic",
+      "prompt_text": "50 Sekunden Diskussion mit mehreren Sprechern im Wechsel, Halbtotalen bevorzugt"
+    },
+    "plan": {
+      "narrative_intent_de": "Diskussion zwischen mehreren Personen in einer offenen Raumstruktur",
+      "target_duration_s": 50,
+      "planned_total_duration_s": 49,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkelansicht eines Raumes mit mehreren Personen, die sich unterhalten",
+          "intent_en": "wide shot of a room with multiple people engaging in conversation",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Atmosphärisch, ruhig einleitend"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Halbtotalansicht einer Person, die spricht",
+          "intent_en": "medium shot of a person speaking",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert auf den Sprecher"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Wechsel zur anderen Person im Gespräch, Halbtotalansicht",
+          "intent_en": "cut to the other person in conversation, medium shot",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert auf den Sprecher"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Weitwinkelansicht des Raumes mit mehreren Personen, die sich unterhalten",
+          "intent_en": "wide shot of a room with multiple people engaging in conversation",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Halbtotalansicht einer Person, die spricht",
+          "intent_en": "medium shot of a person speaking",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert auf den Sprecher"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Wechsel zur anderen Person im Gespräch, Halbtotalansicht",
+          "intent_en": "cut to the other person in conversation, medium shot",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert auf den Sprecher"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "Weitwinkelansicht des Raumes mit mehreren Personen, die sich unterhalten",
+          "intent_en": "wide shot of a room with multiple people engaging in conversation",
+          "duration_min_s": 5.0,
+          "duration_max_s": 8.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "Halbtotalansicht einer Person, die spricht",
+          "intent_en": "medium shot of a person speaking",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert auf den Sprecher"
+        },
+        {
+          "slot_id": 9,
+          "intent_de": "Wechsel zur anderen Person im Gespräch, Halbtotalansicht",
+          "intent_en": "cut to the other person in conversation, medium shot",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Konzentriert auf den Sprecher"
+        }
+      ],
+      "_meta": {
+        "wall_s": 102.8,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "50 Sekunden Diskussion mit mehreren Sprechern im Wechsel, Halbtotalen bevorzugt",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 6,
+      "total_duration_s": 38.96,
+      "skipped_slots": 3,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkelansicht eines Raumes mit mehreren Personen, die sich unterhalten",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Halbtotalansicht einer Person, die spricht",
+        "outcome": "picked",
+        "scene_id": "9e4bd216-9f27-416d-b208-ee1b80a47873",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2173,
+        "text_score": 0.3424,
+        "score": 0.2673,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 9.5,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+            "score": 0.2496
+          },
+          {
+            "scene_id": "27071d32-b73d-4587-8682-98b047d14daa",
+            "score": 0.2449
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Wechsel zur anderen Person im Gespräch, Halbtotalansicht",
+        "outcome": "picked",
+        "scene_id": "1dad0a1e-0e15-42b3-8a17-5ec06cb58e83",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1833,
+        "text_score": 0.4774,
+        "score": 0.3009,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 3.63,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "0c4dbaf8-010f-4d49-b6db-1c43457b7bd5",
+            "score": 0.2779
+          },
+          {
+            "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+            "score": 0.2491
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Weitwinkelansicht des Raumes mit mehreren Personen, die sich unterhalten",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Halbtotalansicht einer Person, die spricht",
+        "outcome": "picked",
+        "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.236,
+        "text_score": 0.2701,
+        "score": 0.2496,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "27071d32-b73d-4587-8682-98b047d14daa",
+            "score": 0.2449
+          },
+          {
+            "scene_id": "0c4dbaf8-010f-4d49-b6db-1c43457b7bd5",
+            "score": 0.2252
+          }
+        ]
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Wechsel zur anderen Person im Gespräch, Halbtotalansicht",
+        "outcome": "picked",
+        "scene_id": "0c4dbaf8-010f-4d49-b6db-1c43457b7bd5",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1846,
+        "text_score": 0.4177,
+        "score": 0.2779,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.53,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+            "score": 0.2491
+          },
+          {
+            "scene_id": "07b4da84-9ed8-477a-aebc-c1a68825894e",
+            "score": 0.2402
+          }
+        ]
+      },
+      {
+        "slot_id": "7",
+        "intent_de": "Weitwinkelansicht des Raumes mit mehreren Personen, die sich unterhalten",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "8",
+        "intent_de": "Halbtotalansicht einer Person, die spricht",
+        "outcome": "picked",
+        "scene_id": "27071d32-b73d-4587-8682-98b047d14daa",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2322,
+        "text_score": 0.264,
+        "score": 0.2449,
+        "target_duration_s": 3.96,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+            "score": 0.217
+          },
+          {
+            "scene_id": "07b4da84-9ed8-477a-aebc-c1a68825894e",
+            "score": 0.2074
+          }
+        ]
+      },
+      {
+        "slot_id": "9",
+        "intent_de": "Wechsel zur anderen Person im Gespräch, Halbtotalansicht",
+        "outcome": "picked",
+        "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1968,
+        "text_score": 0.3274,
+        "score": 0.2491,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.5,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "07b4da84-9ed8-477a-aebc-c1a68825894e",
+            "score": 0.2402
+          },
+          {
+            "scene_id": "932972ac-491e-4521-8490-c364445201cb",
+            "score": 0.229
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "narrative_lonely_cook",
+        "prompt": "90 Sekunden über die Einsamkeit des Kochs am frühen Morgen in der leeren Küche, Wechsel zwischen Weitwinkel und Nahaufnahmen, endet auf einem stillen Close-up seines Gesichts",
+        "duration_s": 90,
+        "profile": "narrative_mixed",
+        "notes": "Prompt initial de la thèse — narratif fort, framings mixtes"
+      },
+      "assemble_mode": "heuristic"
+    },
+    "error": "",
+    "metrics": {
+      "prompt_id": "narrative_lonely_cook",
+      "profile": "narrative_mixed",
+      "assemble_mode": "heuristic",
+      "prompt_text": "90 Sekunden über die Einsamkeit des Kochs am frühen Morgen in der leeren Küche, Wechsel zwischen Weitwinkel und Nahaufnahmen, endet auf einem stillen Close-up seines Gesichts",
+      "error": ""
+    }
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "narrative_documentary_open",
+        "prompt": "30 Sekunden Doku-Intro: Weitwinkel-Establisher, dann Nahaufnahme eines menschlichen Details, endet auf einem Halbtotal einer aktiven Person",
+        "duration_s": 30,
+        "profile": "narrative_mixed",
+        "notes": "Freytag-esque, structure claire"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 30,
+      "actual_duration_s": 17.34,
+      "duration_deviation_s": 12.66,
+      "duration_deviation_pct": 0.422,
+      "n_segments": 3,
+      "unique_clips": 2,
+      "clip_diversity": 0.6667,
+      "framing_distribution": {
+        "wide_no_person": 1,
+        "closeup": 1,
+        "medium": 1
+      },
+      "framing_entropy": 1.585,
+      "avg_top1_score": 0.3339,
+      "min_top1_score": 0.2698,
+      "max_top1_score": 0.4224,
+      "avg_top1_top2_gap": 0.0115,
+      "n_slots_planned": 3,
+      "n_slots_picked": 3,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "full_scene": 2,
+        "max_words_speaker": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 1,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.3959,
+      "coverage_min": 0.2735,
+      "coverage_max": 0.4681,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.2735
+        },
+        {
+          "slot_id": "2",
+          "score": 0.446
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4681
+        }
+      ],
+      "wall_total_s": 44.48,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 43.51,
+      "wall_retrieve_s": 0.92,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "narrative_documentary_open",
+      "profile": "narrative_mixed",
+      "assemble_mode": "heuristic",
+      "prompt_text": "30 Sekunden Doku-Intro: Weitwinkel-Establisher, dann Nahaufnahme eines menschlichen Details, endet auf einem Halbtotal einer aktiven Person"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein einführendes Doku-Bild der leeren Küche am Morgen, gefolgt von einem Detail und schließt mit einer Person in Aktion",
+      "target_duration_s": 30,
+      "planned_total_duration_s": 29.5,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Etablierendes Weitwinkel-Bild der leeren Küche am frühen Morgen",
+          "intent_en": "wide establishing shot of an empty kitchen in the early morning",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, atmosphärisch, sanft einleitend"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Nahaufnahme eines menschlichen Details wie einer Hand auf einem Tisch",
+          "intent_en": "closeup of a human detail like a hand on a table",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Details betonen, sanft in die nächste Szene übergehen"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Halbtotal einer Person, die aktiv in der Küche ist",
+          "intent_en": "mid-shot of a person actively being in the kitchen",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": false,
+          "notes_de": "Aktiv, dynamisch, abschließend"
+        }
+      ],
+      "_meta": {
+        "wall_s": 43.51,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "30 Sekunden Doku-Intro: Weitwinkel-Establisher, dann Nahaufnahme eines menschlichen Details, endet auf einem Halbtotal einer aktiven Person",
+        "pool_aware": true
+      },
+      "_validation_warnings": [
+        "total mid-duration (15.0s) deviates 50% from target (30s)"
+      ]
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 3,
+      "total_duration_s": 17.34,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Etablierendes Weitwinkel-Bild der leeren Küche am frühen Morgen",
+        "outcome": "picked",
+        "scene_id": "1fc5072a-6505-42fa-93cf-1be15bde2d10",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.136,
+        "text_score": 0.8521,
+        "score": 0.4224,
+        "target_duration_s": 5.542,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0d00d687-3d18-42cb-a840-7ba9d5a0ef05",
+            "score": 0.4153
+          },
+          {
+            "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+            "score": 0.3854
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Nahaufnahme eines menschlichen Details wie einer Hand auf einem Tisch",
+        "outcome": "picked",
+        "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1886,
+        "text_score": 0.3915,
+        "score": 0.2698,
+        "target_duration_s": 4.8,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+            "score": 0.2569
+          },
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.2541
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Halbtotal einer Person, die aktiv in der Küche ist",
+        "outcome": "picked",
+        "scene_id": "9e4bd216-9f27-416d-b208-ee1b80a47873",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1908,
+        "text_score": 0.4877,
+        "score": 0.3096,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 9.5,
+        "trim_strategy": "max_words_speaker",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+            "score": 0.2952
+          },
+          {
+            "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+            "score": 0.2638
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "narrative_music_video",
+        "prompt": "45 Sekunden Musikclip: rhythmische Wechsel zwischen Nahaufnahmen von Bewegung und Weitwinkel-Umgebung",
+        "duration_s": 45,
+        "profile": "narrative_mixed",
+        "notes": "Rythme rapide, testera dur/max_s des slots"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 45,
+      "actual_duration_s": 32.76,
+      "duration_deviation_s": 12.24,
+      "duration_deviation_pct": 0.272,
+      "n_segments": 6,
+      "unique_clips": 4,
+      "clip_diversity": 0.6667,
+      "framing_distribution": {
+        "wide_no_person": 1,
+        "closeup": 4,
+        "wide_with_person": 1
+      },
+      "framing_entropy": 1.2516,
+      "avg_top1_score": 0.375,
+      "min_top1_score": 0.1092,
+      "max_top1_score": 0.4495,
+      "avg_top1_top2_gap": 0.0269,
+      "n_slots_planned": 8,
+      "n_slots_picked": 6,
+      "n_slots_skipped": 2,
+      "skipped_ratio": 0.25,
+      "trim_strategy_distribution": {
+        "centered_default": 1,
+        "min_words_broll": 3,
+        "full_scene": 2
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5196,
+      "coverage_min": 0.3483,
+      "coverage_max": 0.6902,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.3483
+        },
+        {
+          "slot_id": "2",
+          "score": 0.4488
+        },
+        {
+          "slot_id": "3",
+          "score": 0.6902
+        },
+        {
+          "slot_id": "4",
+          "score": 0.6026
+        },
+        {
+          "slot_id": "6",
+          "score": 0.4381
+        },
+        {
+          "slot_id": "8",
+          "score": 0.5898
+        }
+      ],
+      "wall_total_s": 102.34,
+      "wall_pool_summary_s": 0.02,
+      "wall_plan_s": 101.79,
+      "wall_retrieve_s": 0.52,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "narrative_music_video",
+      "profile": "narrative_mixed",
+      "assemble_mode": "heuristic",
+      "prompt_text": "45 Sekunden Musikclip: rhythmische Wechsel zwischen Nahaufnahmen von Bewegung und Weitwinkel-Umgebung"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein dynamischer Musikclip, der rhythmisch zwischen Nahaufnahmen von Bewegungen und weiträumigen Umgebungsansichten pendelt.",
+      "target_duration_s": 45,
+      "planned_total_duration_s": 43.5,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkelaufnahme eines ruhigen Parkplatzes mit ein paar Autos",
+          "intent_en": "wide shot of a quiet parking lot with a few cars",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und lebendig durch die Bewegung der Autos"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Nahaufnahme von Händen, die eine Gitarre stimmen",
+          "intent_en": "closeup of hands tuning a guitar",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Fokussiert und konzentriert, rhythmisch durch die Bewegung der Hände"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkelaufnahme einer Stadtmitte mit lauter Musik aus einem nahen Club",
+          "intent_en": "wide shot of a city center with loud music coming from a nearby club",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebendig und dynamisch, Musik ist deutlich hörbar"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Nahaufnahme eines Musikers, der eine Gitarre spielt",
+          "intent_en": "closeup of a musician playing the guitar",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Intensiv, rhythmisch durch die Bewegung der Finger"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Weitwinkelaufnahme eines ruhigen Flussufers mit einem Spaziergänger",
+          "intent_en": "wide shot of a quiet riverside with a person walking along it",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Beruhigend, lebendig durch die Bewegung des Spaziergängers"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Nahaufnahme von einem DJ, der auf einer Konsole arbeitet",
+          "intent_en": "closeup of a DJ working on a console",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Konzentriert, rhythmisch durch die Bewegung der Hände"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "Weitwinkelaufnahme eines belebten Marktplatzes mit Musik",
+          "intent_en": "wide shot of a busy market square with music playing",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebendig und dynamisch, Musik ist deutlich hörbar"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "Nahaufnahme von einem Musiker, der eine Trommel spielt",
+          "intent_en": "closeup of a musician playing the drums",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Intensiv, rhythmisch durch die Bewegung der Hände"
+        }
+      ],
+      "_meta": {
+        "wall_s": 101.79,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "45 Sekunden Musikclip: rhythmische Wechsel zwischen Nahaufnahmen von Bewegung und Weitwinkel-Umgebung",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 6,
+      "total_duration_s": 32.76,
+      "skipped_slots": 2,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkelaufnahme eines ruhigen Parkplatzes mit ein paar Autos",
+        "outcome": "picked",
+        "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.142,
+        "text_score": 0.9092,
+        "score": 0.4489,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 5.354,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "b8adc472-7288-475a-b7f2-ab2a1611eeb7",
+            "score": 0.4438
+          },
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.4355
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Nahaufnahme von Händen, die eine Gitarre stimmen",
+        "outcome": "picked",
+        "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1395,
+        "text_score": 0.9147,
+        "score": 0.4495,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 1.03,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+            "score": 0.3844
+          },
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.3116
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkelaufnahme einer Stadtmitte mit lauter Musik aus einem nahen Club",
+        "outcome": "picked",
+        "scene_id": "8cc3d7b9-a119-4a6c-88f6-f36ec61ea833",
+        "clip_name": "bbb_middle.mp4",
+        "clip_score": 0.182,
+        "text_score": 0.0,
+        "score": 0.1092,
+        "target_duration_s": 5.958,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_with_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Nahaufnahme eines Musikers, der eine Gitarre spielt",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.1811,
+        "text_score": 0.8019,
+        "score": 0.4294,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 17.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.4048
+          },
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.3161
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Weitwinkelaufnahme eines ruhigen Flussufers mit einem Spaziergänger",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Nahaufnahme von einem DJ, der auf einer Konsole arbeitet",
+        "outcome": "picked",
+        "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.188,
+        "text_score": 0.7197,
+        "score": 0.4007,
+        "target_duration_s": 4.8,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.3879
+          }
+        ]
+      },
+      {
+        "slot_id": "7",
+        "intent_de": "Weitwinkelaufnahme eines belebten Marktplatzes mit Musik",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "8",
+        "intent_de": "Nahaufnahme von einem Musiker, der eine Trommel spielt",
+        "outcome": "picked",
+        "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1738,
+        "text_score": 0.7702,
+        "score": 0.4123,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 0.5,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": []
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "narrative_teaser_energetic",
+        "prompt": "20 Sekunden energischer Teaser mit schnellen Schnitten, wechselnde Framings, aufsteigende Intensität",
+        "duration_s": 20,
+        "profile": "narrative_mixed",
+        "notes": "Cut court dense, ~8-10 slots minimum"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 20,
+      "actual_duration_s": 29.88,
+      "duration_deviation_s": 9.88,
+      "duration_deviation_pct": 0.494,
+      "n_segments": 8,
+      "unique_clips": 5,
+      "clip_diversity": 0.625,
+      "framing_distribution": {
+        "wide_no_person": 3,
+        "closeup": 3,
+        "medium": 2
+      },
+      "framing_entropy": 1.5613,
+      "avg_top1_score": 0.3668,
+      "min_top1_score": 0.1743,
+      "max_top1_score": 0.4834,
+      "avg_top1_top2_gap": 0.0445,
+      "n_slots_planned": 8,
+      "n_slots_picked": 8,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "full_scene": 2,
+        "min_words_broll": 4,
+        "max_words_dialogue": 1,
+        "max_words_speaker": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": 1.0,
+      "n_speaker_constrained": 2,
+      "n_dialogue_constrained": 1,
+      "coverage_mean": 0.4373,
+      "coverage_min": 0.3234,
+      "coverage_max": 0.5971,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.3971
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5971
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4026
+        },
+        {
+          "slot_id": "4",
+          "score": 0.4686
+        },
+        {
+          "slot_id": "5",
+          "score": 0.539
+        },
+        {
+          "slot_id": "6",
+          "score": 0.3722
+        },
+        {
+          "slot_id": "7",
+          "score": 0.3984
+        },
+        {
+          "slot_id": "8",
+          "score": 0.3234
+        }
+      ],
+      "wall_total_s": 92.14,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 90.01,
+      "wall_retrieve_s": 2.09,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "narrative_teaser_energetic",
+      "profile": "narrative_mixed",
+      "assemble_mode": "heuristic",
+      "prompt_text": "20 Sekunden energischer Teaser mit schnellen Schnitten, wechselnde Framings, aufsteigende Intensität"
+    },
+    "plan": {
+      "narrative_intent_de": "Energischer Teaser mit schnellen Schnitten und steigernder Intensität",
+      "target_duration_s": 20,
+      "planned_total_duration_s": 19.5,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes am Morgen",
+          "intent_en": "wide shot of a bustling marketplace in the morning",
+          "duration_min_s": 2.0,
+          "duration_max_s": 4.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebhaft, dynamisch"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Close-up von frischen Gemüse- und Obstständen",
+          "intent_en": "closeup of fresh vegetable and fruit stands",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Details, Farben"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Medium-Aufnahme von Menschen im Markt, die einkaufen gehen",
+          "intent_en": "medium shot of people shopping in the market",
+          "duration_min_s": 2.0,
+          "duration_max_s": 4.0,
+          "framing_hint": "medium",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Interaktionen, Bewegung"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Close-up von einem lächelnden Verkäufer mit frischem Obst",
+          "intent_en": "closeup of a smiling vendor with fresh fruit",
+          "duration_min_s": 2.0,
+          "duration_max_s": 3.5,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": true,
+          "notes_de": "Positiv, freundlich"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes am Nachmittag",
+          "intent_en": "wide shot of a bustling marketplace in the afternoon",
+          "duration_min_s": 2.0,
+          "duration_max_s": 4.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lichtveränderung, Wärme"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Medium-Aufnahme von Kindern, die Eis essen und lachen",
+          "intent_en": "medium shot of children eating ice cream and laughing",
+          "duration_min_s": 2.0,
+          "duration_max_s": 4.0,
+          "framing_hint": "medium",
+          "needs_speaker": true,
+          "needs_dialogue": false,
+          "notes_de": "Lebensfreude, Freude"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "Close-up von einem bunten Blumenstand",
+          "intent_en": "closeup of a colorful flower stand",
+          "duration_min_s": 2.0,
+          "duration_max_s": 3.5,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Farbenprächtig, lebendig"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "Weitwinkel-Bild des Marktes am Abend unter Sternenlicht",
+          "intent_en": "wide shot of the market at night under starlight",
+          "duration_min_s": 2.0,
+          "duration_max_s": 4.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Romantisch, friedlich"
+        }
+      ],
+      "_meta": {
+        "wall_s": 90.01,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "20 Sekunden energischer Teaser mit schnellen Schnitten, wechselnde Framings, aufsteigende Intensität",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 8,
+      "total_duration_s": 29.88,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes am Morgen",
+        "outcome": "picked",
+        "scene_id": "2d6493aa-ead3-429c-9372-19eea5c1d62d",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1603,
+        "text_score": 0.926,
+        "score": 0.4666,
+        "target_duration_s": 3.125,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "ec3a729a-428e-4d72-ae88-8e375096331c",
+            "score": 0.4665
+          },
+          {
+            "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+            "score": 0.4664
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Close-up von frischen Gemüse- und Obstständen",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.1789,
+        "text_score": 0.4951,
+        "score": 0.3054,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 17.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.176
+          },
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.1623
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Medium-Aufnahme von Menschen im Markt, die einkaufen gehen",
+        "outcome": "picked",
+        "scene_id": "f3f38c5a-d83b-462e-ae8b-d61bfdd02607",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1017,
+        "text_score": 0.8054,
+        "score": 0.3831,
+        "target_duration_s": 4.0,
+        "trim_start_in_scene_s": 1.11,
+        "trim_strategy": "min_words_broll",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "9e4bd216-9f27-416d-b208-ee1b80a47873",
+            "score": 0.3345
+          },
+          {
+            "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+            "score": 0.2929
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Close-up von einem lächelnden Verkäufer mit frischem Obst",
+        "outcome": "picked",
+        "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1281,
+        "text_score": 0.3476,
+        "score": 0.2159,
+        "target_duration_s": 3.5,
+        "trim_start_in_scene_s": 4.27,
+        "trim_strategy": "max_words_dialogue",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.2084
+          },
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.1715
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes am Nachmittag",
+        "outcome": "picked",
+        "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+        "clip_name": "mlk_1min.mp4",
+        "clip_score": 0.147,
+        "text_score": 0.9407,
+        "score": 0.4645,
+        "target_duration_s": 4.0,
+        "trim_start_in_scene_s": 32.5,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "ec3a729a-428e-4d72-ae88-8e375096331c",
+            "score": 0.4609
+          },
+          {
+            "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+            "score": 0.4607
+          }
+        ]
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Medium-Aufnahme von Kindern, die Eis essen und lachen",
+        "outcome": "picked",
+        "scene_id": "9e4bd216-9f27-416d-b208-ee1b80a47873",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1374,
+        "text_score": 0.8967,
+        "score": 0.4411,
+        "target_duration_s": 4.0,
+        "trim_start_in_scene_s": 12.5,
+        "trim_strategy": "max_words_speaker",
+        "framing": "medium",
+        "runner_ups": [
+          {
+            "scene_id": "bbd3356a-e70b-4eb9-be7e-4dfd7c3fc492",
+            "score": 0.3331
+          },
+          {
+            "scene_id": "0c4dbaf8-010f-4d49-b6db-1c43457b7bd5",
+            "score": 0.303
+          }
+        ]
+      },
+      {
+        "slot_id": "7",
+        "intent_de": "Close-up von einem bunten Blumenstand",
+        "outcome": "picked",
+        "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.1367,
+        "text_score": 0.2308,
+        "score": 0.1743,
+        "target_duration_s": 3.5,
+        "trim_start_in_scene_s": 1.3,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.1642
+          }
+        ]
+      },
+      {
+        "slot_id": "8",
+        "intent_de": "Weitwinkel-Bild des Marktes am Abend unter Sternenlicht",
+        "outcome": "picked",
+        "scene_id": "a13deac0-3e1f-4049-b4b3-686c272e9781",
+        "clip_name": "bbb_middle.mp4",
+        "clip_score": 0.139,
+        "text_score": 1.0,
+        "score": 0.4834,
+        "target_duration_s": 2.75,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "ec3a729a-428e-4d72-ae88-8e375096331c",
+            "score": 0.4347
+          },
+          {
+            "scene_id": "eaabe8e4-a54c-4163-907b-7fb8c2eb6233",
+            "score": 0.3954
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "narrative_slow_atmospheric",
+        "prompt": "120 Sekunden langsamer, atmosphärischer Cut: lange Weitwinkel, gelegentliche Nahaufnahmen als Akzent",
+        "duration_s": 120,
+        "profile": "narrative_mixed",
+        "notes": "Cut long, teste convergence duration + diversité"
+      },
+      "assemble_mode": "heuristic"
+    },
+    "error": "",
+    "metrics": {
+      "prompt_id": "narrative_slow_atmospheric",
+      "profile": "narrative_mixed",
+      "assemble_mode": "heuristic",
+      "prompt_text": "120 Sekunden langsamer, atmosphärischer Cut: lange Weitwinkel, gelegentliche Nahaufnahmen als Akzent",
+      "error": ""
+    }
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "edge_very_short",
+        "prompt": "8 Sekunden Micro-Cut: 2 Weitwinkel + 1 Closeup, sehr schnell",
+        "duration_s": 8,
+        "profile": "edge",
+        "notes": "Très court — teste borne inférieure"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 8,
+      "actual_duration_s": 9.0,
+      "duration_deviation_s": 1.0,
+      "duration_deviation_pct": 0.125,
+      "n_segments": 3,
+      "unique_clips": 3,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "wide_no_person": 1,
+        "wide_with_person": 1,
+        "closeup": 1
+      },
+      "framing_entropy": 1.585,
+      "avg_top1_score": 0.299,
+      "min_top1_score": 0.0856,
+      "max_top1_score": 0.4804,
+      "avg_top1_top2_gap": 0.0956,
+      "n_slots_planned": 3,
+      "n_slots_picked": 3,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "min_words_broll": 2,
+        "centered_default": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5385,
+      "coverage_min": 0.5179,
+      "coverage_max": 0.5793,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.5179
+        },
+        {
+          "slot_id": "2",
+          "score": 0.5793
+        },
+        {
+          "slot_id": "3",
+          "score": 0.5183
+        }
+      ],
+      "wall_total_s": 46.65,
+      "wall_pool_summary_s": 0.09,
+      "wall_plan_s": 42.53,
+      "wall_retrieve_s": 4.02,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "edge_very_short",
+      "profile": "edge",
+      "assemble_mode": "heuristic",
+      "prompt_text": "8 Sekunden Micro-Cut: 2 Weitwinkel + 1 Closeup, sehr schnell"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein schnelles, dynamisches Einstiegsszenario mit starkem Kontrast zwischen Umgebung und Person",
+      "target_duration_s": 8,
+      "planned_total_duration_s": 7.95,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild einer leeren, sonnigen Straße zur Mittagszeit",
+          "intent_en": "wide shot of an empty sunny street in the middle of the day",
+          "duration_min_s": 2.0,
+          "duration_max_s": 3.5,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Leere, friedliche Stimmung"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes mit Menschen und Marktständen",
+          "intent_en": "wide shot of a bustling market square with people and stalls",
+          "duration_min_s": 2.0,
+          "duration_max_s": 3.5,
+          "framing_hint": "wide_with_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Vibrierend, lebhaft"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Close-up eines lächelnden Kindes unter einem Sonnenschirm",
+          "intent_en": "closeup of a smiling child under an umbrella",
+          "duration_min_s": 1.5,
+          "duration_max_s": 2.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Warm, freundlich"
+        }
+      ],
+      "_meta": {
+        "wall_s": 42.53,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "8 Sekunden Micro-Cut: 2 Weitwinkel + 1 Closeup, sehr schnell",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 3,
+      "total_duration_s": 9.0,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild einer leeren, sonnigen Straße zur Mittagszeit",
+        "outcome": "picked",
+        "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+        "clip_name": "mlk_1min.mp4",
+        "clip_score": 0.134,
+        "text_score": 1.0,
+        "score": 0.4804,
+        "target_duration_s": 3.5,
+        "trim_start_in_scene_s": 32.5,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+            "score": 0.3609
+          },
+          {
+            "scene_id": "c858b681-501c-48be-a363-9ff445986977",
+            "score": 0.3525
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkel-Bild eines belebten Marktplatzes mit Menschen und Marktständen",
+        "outcome": "picked",
+        "scene_id": "8cc3d7b9-a119-4a6c-88f6-f36ec61ea833",
+        "clip_name": "bbb_middle.mp4",
+        "clip_score": 0.1426,
+        "text_score": 0.0,
+        "score": 0.0856,
+        "target_duration_s": 3.5,
+        "trim_start_in_scene_s": 1.229,
+        "trim_strategy": "centered_default",
+        "framing": "wide_with_person",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Close-up eines lächelnden Kindes unter einem Sonnenschirm",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.1597,
+        "text_score": 0.5879,
+        "score": 0.3309,
+        "target_duration_s": 2.0,
+        "trim_start_in_scene_s": 20.5,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2592
+          },
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.2005
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "edge_no_person_hard",
+        "prompt": "30 Sekunden Landschaftsimpressionen, ABSOLUT KEINE MENSCHEN im Bild, nur Natur",
+        "duration_s": 30,
+        "profile": "edge",
+        "notes": "Contrainte dure — testera pool-aware planner"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 30,
+      "actual_duration_s": 32.58,
+      "duration_deviation_s": 2.58,
+      "duration_deviation_pct": 0.086,
+      "n_segments": 5,
+      "unique_clips": 3,
+      "clip_diversity": 0.6,
+      "framing_distribution": {
+        "wide_no_person": 5
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.3953,
+      "min_top1_score": 0.2934,
+      "max_top1_score": 0.4381,
+      "avg_top1_top2_gap": 0.0597,
+      "n_slots_planned": 5,
+      "n_slots_picked": 5,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "min_words_broll": 2,
+        "centered_default": 2,
+        "full_scene": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.4346,
+      "coverage_min": 0.3074,
+      "coverage_max": 0.6212,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.3445
+        },
+        {
+          "slot_id": "2",
+          "score": 0.6212
+        },
+        {
+          "slot_id": "3",
+          "score": 0.5471
+        },
+        {
+          "slot_id": "4",
+          "score": 0.353
+        },
+        {
+          "slot_id": "5",
+          "score": 0.3074
+        }
+      ],
+      "wall_total_s": 66.16,
+      "wall_pool_summary_s": 0.01,
+      "wall_plan_s": 64.89,
+      "wall_retrieve_s": 1.25,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "edge_no_person_hard",
+      "profile": "edge",
+      "assemble_mode": "heuristic",
+      "prompt_text": "30 Sekunden Landschaftsimpressionen, ABSOLUT KEINE MENSCHEN im Bild, nur Natur"
+    },
+    "plan": {
+      "narrative_intent_de": "Eine idyllische Naturlandschaft ohne Menschen",
+      "target_duration_s": 30,
+      "planned_total_duration_s": 29,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild eines stillen Waldes mit Sonnenschein durch die Bäume",
+          "intent_en": "wide shot of a tranquil forest with sunlight filtering through the trees",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig und entspannt"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Weitwinkel-Bild eines stillen Flusses unter einem blauen Himmel",
+          "intent_en": "wide shot of a quiet river under a blue sky",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Sonnig und friedlich, ruhiges Tempo"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Weitwinkel-Bild eines Feldes mit gelben Blumen im Sonnenschein",
+          "intent_en": "wide shot of a field with yellow flowers in the sunlight",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Lebensfroh und lebendig, sanftes Tempo"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Weitwinkel-Bild eines stillen Waldsees mit Spiegelbild der Bäume",
+          "intent_en": "wide shot of a tranquil forest lake with the reflection of trees",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Beruhigend und friedlich, ruhiges Tempo"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Weitwinkel-Bild eines stillen Berges mit Wolken am Himmel",
+          "intent_en": "wide shot of a tranquil mountain with clouds in the sky",
+          "duration_min_s": 4.0,
+          "duration_max_s": 7.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig und majestätisch, langsame Bewegung"
+        }
+      ],
+      "_meta": {
+        "wall_s": 64.89,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "30 Sekunden Landschaftsimpressionen, ABSOLUT KEINE MENSCHEN im Bild, nur Natur",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 5,
+      "total_duration_s": 32.58,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild eines stillen Waldes mit Sonnenschein durch die Bäume",
+        "outcome": "picked",
+        "scene_id": "0da27d3f-bcdb-48d9-bafb-07210278043e",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1926,
+        "text_score": 0.7941,
+        "score": 0.4332,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3542
+          },
+          {
+            "scene_id": "b5c8314c-77e3-4725-810b-b1c843a1e097",
+            "score": 0.3529
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Weitwinkel-Bild eines stillen Flusses unter einem blauen Himmel",
+        "outcome": "picked",
+        "scene_id": "6b34531f-eeaa-48a2-8b39-8313fce72e5e",
+        "clip_name": "pexels_waves_17s.mp4",
+        "clip_score": 0.1709,
+        "text_score": 0.6816,
+        "score": 0.3752,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 5.38,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "b5c8314c-77e3-4725-810b-b1c843a1e097",
+            "score": 0.3292
+          },
+          {
+            "scene_id": "c858b681-501c-48be-a363-9ff445986977",
+            "score": 0.2539
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Weitwinkel-Bild eines Feldes mit gelben Blumen im Sonnenschein",
+        "outcome": "picked",
+        "scene_id": "0dbaa2ad-36e5-4c05-9776-3a83fefcc200",
+        "clip_name": "bbb_action.mp4",
+        "clip_score": 0.2296,
+        "text_score": 0.7508,
+        "score": 0.4381,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 2.458,
+        "trim_strategy": "min_words_broll",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "a5e81add-6a91-47a2-b2aa-615d6f35d968",
+            "score": 0.3362
+          },
+          {
+            "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+            "score": 0.3052
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Weitwinkel-Bild eines stillen Waldsees mit Spiegelbild der Bäume",
+        "outcome": "picked",
+        "scene_id": "61851e1d-aa0b-42f0-ae60-09dd8b3ca763",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.1572,
+        "text_score": 0.8553,
+        "score": 0.4364,
+        "target_duration_s": 7.0,
+        "trim_start_in_scene_s": 5.354,
+        "trim_strategy": "centered_default",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "42343af9-0ea6-4075-8de1-6c56dbd2feae",
+            "score": 0.4114
+          },
+          {
+            "scene_id": "8d9e3423-4858-440a-b6d8-e627906e5bc4",
+            "score": 0.3982
+          }
+        ]
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Weitwinkel-Bild eines stillen Berges mit Wolken am Himmel",
+        "outcome": "picked",
+        "scene_id": "b5c8314c-77e3-4725-810b-b1c843a1e097",
+        "clip_name": "bbb_intro.mp4",
+        "clip_score": 0.2021,
+        "text_score": 0.4304,
+        "score": 0.2934,
+        "target_duration_s": 4.583,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "bf8ec3f3-03b7-41a0-94f4-fc56498e1931",
+            "score": 0.2469
+          },
+          {
+            "scene_id": "afa68347-0a7f-4b08-b736-00015b2b9219",
+            "score": 0.2452
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "meta": {
+      "prompt": {
+        "id": "edge_all_closeup",
+        "prompt": "45 Sekunden ausschliesslich Nahaufnahmen von Gesichtern oder Details, NIE Weitwinkel",
+        "duration_s": 45,
+        "profile": "edge",
+        "notes": "Contrainte dure framing — pool a peu de closeups"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 45,
+      "actual_duration_s": 19.8,
+      "duration_deviation_s": 25.2,
+      "duration_deviation_pct": 0.56,
+      "n_segments": 4,
+      "unique_clips": 2,
+      "clip_diversity": 0.5,
+      "framing_distribution": {
+        "closeup": 4
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.2509,
+      "min_top1_score": 0.2006,
+      "max_top1_score": 0.3118,
+      "avg_top1_top2_gap": 0.0286,
+      "n_slots_planned": 8,
+      "n_slots_picked": 4,
+      "n_slots_skipped": 4,
+      "skipped_ratio": 0.5,
+      "trim_strategy_distribution": {
+        "max_words_speaker": 2,
+        "full_scene": 1,
+        "min_words_broll": 1
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": 1.0,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 2,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.5497,
+      "coverage_min": 0.4088,
+      "coverage_max": 0.6568,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.6568
+        },
+        {
+          "slot_id": "2",
+          "score": 0.628
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4088
+        },
+        {
+          "slot_id": "4",
+          "score": 0.5051
+        }
+      ],
+      "wall_total_s": 90.04,
+      "wall_pool_summary_s": 0.03,
+      "wall_plan_s": 89.48,
+      "wall_retrieve_s": 0.53,
+      "wall_assemble_s": 0.0,
+      "pool_size": 68,
+      "prompt_id": "edge_all_closeup",
+      "profile": "edge",
+      "assemble_mode": "heuristic",
+      "prompt_text": "45 Sekunden ausschliesslich Nahaufnahmen von Gesichtern oder Details, NIE Weitwinkel"
+    },
+    "plan": {
+      "narrative_intent_de": "Ein kurzer Cut mit ausschließlichen Nahaufnahmen von Gesichtern und Details ohne weitwinklige Einstellungen.",
+      "target_duration_s": 45,
+      "planned_total_duration_s": 43.5,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Nahaufnahme eines Menschen, der aufmerksam zuhört",
+          "intent_en": "closeup of a person listening intently",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Nahaufnahme eines Menschen, der spricht",
+          "intent_en": "closeup of a person speaking",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Nahaufnahme eines Menschen, der nachdenkt",
+          "intent_en": "closeup of a person thinking",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Nahaufnahme eines Menschen, der lächelt",
+          "intent_en": "closeup of a person smiling",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 5,
+          "intent_de": "Nahaufnahme eines Menschen, der liest",
+          "intent_en": "closeup of a person reading",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 6,
+          "intent_de": "Nahaufnahme eines Menschen, der schreibt",
+          "intent_en": "closeup of a person writing",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 7,
+          "intent_de": "Nahaufnahme eines Menschen, der telefoniert",
+          "intent_en": "closeup of a person talking on the phone",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": true,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        },
+        {
+          "slot_id": 8,
+          "intent_de": "Nahaufnahme eines Menschen, der nachdenkt (weiterer Kontext)",
+          "intent_en": "closeup of a person thinking (further context)",
+          "duration_min_s": 2.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "closeup",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig"
+        }
+      ],
+      "_meta": {
+        "wall_s": 89.48,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "45 Sekunden ausschliesslich Nahaufnahmen von Gesichtern oder Details, NIE Weitwinkel",
+        "pool_aware": true
+      },
+      "_validation_warnings": [
+        "total mid-duration (28.0s) deviates 38% from target (45s)"
+      ]
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 4,
+      "total_duration_s": 19.8,
+      "skipped_slots": 4,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Nahaufnahme eines Menschen, der aufmerksam zuhört",
+        "outcome": "picked",
+        "scene_id": "f1ea7a2e-3556-403c-983e-a1d0949189fe",
+        "clip_name": "mlk_dream_moment.mp4",
+        "clip_score": 0.2599,
+        "text_score": 0.3897,
+        "score": 0.3118,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 6.5,
+        "trim_strategy": "max_words_speaker",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+            "score": 0.2624
+          },
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.2355
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Nahaufnahme eines Menschen, der spricht",
+        "outcome": "picked",
+        "scene_id": "5f53cf55-6ac3-4369-8e2a-a412cfb807c4",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2287,
+        "text_score": 0.3126,
+        "score": 0.2623,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 2.0,
+        "trim_strategy": "max_words_speaker",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+            "score": 0.237
+          },
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2267
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Nahaufnahme eines Menschen, der nachdenkt",
+        "outcome": "picked",
+        "scene_id": "5895cb16-b741-4080-a517-452963c05d76",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2317,
+        "text_score": 0.225,
+        "score": 0.229,
+        "target_duration_s": 4.8,
+        "trim_start_in_scene_s": 0.0,
+        "trim_strategy": "full_scene",
+        "framing": "closeup",
+        "runner_ups": [
+          {
+            "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+            "score": 0.2178
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Nahaufnahme eines Menschen, der lächelt",
+        "outcome": "picked",
+        "scene_id": "6a8383e0-72a5-4119-be65-c5ae10f34a54",
+        "clip_name": "snowden.mp4",
+        "clip_score": 0.2004,
+        "text_score": 0.201,
+        "score": 0.2006,
+        "target_duration_s": 5.0,
+        "trim_start_in_scene_s": 1.03,
+        "trim_strategy": "min_words_broll",
+        "framing": "closeup",
+        "runner_ups": []
+      },
+      {
+        "slot_id": "5",
+        "intent_de": "Nahaufnahme eines Menschen, der liest",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "6",
+        "intent_de": "Nahaufnahme eines Menschen, der schreibt",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "7",
+        "intent_de": "Nahaufnahme eines Menschen, der telefoniert",
+        "outcome": "skipped_no_candidate"
+      },
+      {
+        "slot_id": "8",
+        "intent_de": "Nahaufnahme eines Menschen, der nachdenkt (weiterer Kontext)",
+        "outcome": "skipped_no_candidate"
+      }
+    ]
+  }
+]
