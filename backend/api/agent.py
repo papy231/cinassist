@@ -299,7 +299,7 @@ async def _tool_export_scenes(args: dict, db: AsyncSession) -> dict:
     Deux modes :
       - scene_ids : exporte les scènes complètes de la DB (ordre respecté)
       - segments  : exporte des segments custom (produits par remove_silences,
-                    generate_rough_cut, etc.)
+                    generate_story, generate_timeline_from_prompt, etc.)
     """
     scene_ids = args.get("scene_ids") or []
     segments_arg = args.get("segments") or []
@@ -472,8 +472,9 @@ async def _tool_find_hesitations(args: dict, db: AsyncSession) -> dict:
 
 
 # ─── Stash für Segmente zwischen Tool-Calls ─────────────────
-# L'agent produit des segments avec remove_silences/generate_rough_cut puis les
-# passe à export_scenes/render_video. Persistance à 2 niveaux :
+# L'agent produit des segments avec remove_silences/generate_story/
+# generate_timeline_from_prompt puis les passe à export_scenes/render_video.
+# Persistance à 2 niveaux :
 #   - RAM : lookup rapide pour l'itération courante (perdue au restart)
 #   - DB `timelines` : persistant, survit au restart, permet reprise ultérieure
 _SEGMENT_STASH: dict[str, list[dict]] = {}
@@ -516,105 +517,6 @@ async def _stash_read(stash_id: str, db: AsyncSession) -> list[dict] | None:
             _SEGMENT_STASH[stash_id] = segs  # recharge en RAM
             return segs
     return None
-
-
-async def _tool_generate_rough_cut(args: dict, db: AsyncSession) -> dict:
-    """Generiert einen Rohschnitt Freytag/Beam aus einem oder mehreren Clips.
-
-    Kapselt die bestehende wissenschaftliche Pipeline (ai.py :: /api/ai/cut) und
-    gibt exportbereite Segmente zurück (im Stash für export_last_cleanup).
-    """
-    raw_clip_ids = args.get("clip_ids") or []
-    # Normalise : "*", "all", string, ou list contenant wildcards → fallback tous clips
-    if isinstance(raw_clip_ids, str):
-        raw_clip_ids = [raw_clip_ids]
-    raw_clip_ids = [str(x).strip() for x in raw_clip_ids if x]
-    is_wildcard = any(x in ("*", "all", "tous", "alle") for x in raw_clip_ids)
-
-    if raw_clip_ids and not is_wildcard:
-        # Résoudre nom → UUID si nécessaire
-        clip_ids = await _resolve_clip_ids(db, raw_clip_ids)
-    else:
-        clip_ids = []
-
-    if not clip_ids:
-        # Fallback: prendre TOUS les clips analysés
-        r = await db.execute(select(Clip.id).where(Clip.status == "analysiert"))
-        clip_ids = [str(cid) for (cid,) in r.all()]
-        if not clip_ids:
-            return {"error": "no analyzed clips in project"}
-
-    style = args.get("style", "kinematisch")  # kinematisch|dynamisch|ruhig|energisch
-    prompt = args.get("prompt")
-    max_scenes = args.get("max_scenes")
-    quality_threshold = float(args.get("quality_threshold") or 0.0)
-
-    body = {
-        "stil": style,
-        "prompt": prompt,
-        "clip_ids": clip_ids,
-        "provider": "ollama",
-        "llm_aktiviert": False,  # deterministic pour l'agent
-        "qualitaet_schwelle": quality_threshold,
-        "mit_uebergaengen": False,
-    }
-    if max_scenes:
-        body["max_szenen"] = int(max_scenes)
-
-    try:
-        async with httpx.AsyncClient(timeout=300) as client:
-            r = await client.post("http://localhost:8001/api/ai/cut", json=body)
-            r.raise_for_status()
-            data = r.json()
-    except Exception as e:
-        logger.exception("generate_rough_cut failed")
-        return {"error": f"cut pipeline failed: {e}"}
-
-    # Extraire segments compatibles OTIO export (structure ai/cut : data.daten.segmente)
-    daten = data.get("daten", {}) or {}
-    raw_segments = daten.get("segmente") or daten.get("segments") or data.get("segmente") or []
-    # Filtrer seulement les segments vidéo (track v1)
-    raw_segments = [s for s in raw_segments if str(s.get("track", "")).lower().startswith("v")]
-    if not raw_segments:
-        return {"error": "cut produced no video segments", "raw_response_keys": list(data.keys()), "daten_keys": list(daten.keys())}
-
-    # Résolution clip_path via clips en DB (les segments ont clip_id)
-    clip_id_set = {s.get("clip_id") for s in raw_segments if s.get("clip_id")}
-    if clip_id_set:
-        r2 = await db.execute(select(Clip).where(Clip.id.in_(list(clip_id_set))))
-        clip_by_id = {str(c.id): c for c in r2.scalars().all()}
-    else:
-        clip_by_id = {}
-
-    export_segments: list[dict] = []
-    for seg in raw_segments:
-        cid = seg.get("clip_id")
-        clip = clip_by_id.get(str(cid)) if cid else None
-        if not clip or not clip.dateipfad:
-            continue
-        media_start = float(seg.get("mediaStart", seg.get("media_start", seg.get("start_zeit", 0.0))))
-        duration = float(seg.get("dauer", seg.get("duration", 0.0)))
-        if duration <= 0:
-            continue
-        export_segments.append({
-            "clip_path": clip.dateipfad,
-            "clip_name": clip.dateiname,
-            "media_start": media_start,
-            "duration": duration,
-            "src_scene_id": seg.get("id", ""),
-        })
-
-    await _stash_write("last", export_segments, db)
-    total_duration = sum(s["duration"] for s in export_segments)
-    return {
-        "segment_count": len(export_segments),
-        "total_duration_s": round(total_duration, 2),
-        "style": style,
-        "prompt": prompt,
-        "segments_preview": export_segments[:5],
-        "stash_id": "last",
-        "_hint": "Segments stashés. Utilise export_last_cleanup pour FCPXML.",
-    }
 
 
 async def _tool_generate_timeline_from_prompt(args: dict, db: AsyncSession) -> dict:
@@ -1308,21 +1210,9 @@ TOOLS: dict[str, Tool] = {
         },
         handler=_tool_detect_beats,
     ),
-    "generate_rough_cut": Tool(
-        name="generate_rough_cut",
-        description="Generiert einen KI-Rohschnitt aus deinen Rushes (Pipeline Freytag + Beam Search + Energie). Gibt exportbereite Segmente zurück. Kreatives Herzstück von CinAssist.",
-        args_schema={
-            "clip_ids": "list[str] — zu schneidende Clips (Default: alle analysierten Clips)",
-            "style": "str — 'kinematisch' (Default) | 'dynamisch' | 'ruhig' | 'energisch'",
-            "prompt": "str — freie Angabe zu Ton/Thema des Schnitts ('energischer 30s-Teaser')",
-            "max_scenes": "int — max. Anzahl Szenen in der finalen Timeline",
-            "quality_threshold": "float — 0.0-1.0, Mindest-Energie-Schwelle zur Aufnahme einer Szene",
-        },
-        handler=_tool_generate_rough_cut,
-    ),
     "generate_timeline_from_prompt": Tool(
         name="generate_timeline_from_prompt",
-        description="Generiert eine strukturierte Timeline aus einer natürlichen Beschreibung (Plan → Retrieve → Assemble). Der LLM plant zuerst narrative Slots (Einstellungen mit Framing, Dauer, Speaker-Bedarf), das System sucht dann für jeden Slot die passendsten Szenen via CLIP-Retrieval, und wählt/schneidet zusammen. Kern der wissenschaftlichen Arbeit — deutlich kontrollierbarer als generate_rough_cut. Segmente landen im Stash 'last' (weiter mit render_video / export_scenes).",
+        description="Generiert eine strukturierte Timeline aus einer natürlichen Beschreibung (Plan → Retrieve → Assemble). Der LLM plant zuerst narrative Slots (Einstellungen mit Framing, Dauer, Speaker-Bedarf), das System sucht dann für jeden Slot die passendsten Szenen via CLIP-Retrieval, und wählt/schneidet zusammen. Kern der wissenschaftlichen Arbeit — nutze dies, wenn der Nutzer den gewünschten Schnitt konkret BESCHREIBT. (Für einen ersten Schnitt OHNE Beschreibung nutze stattdessen generate_story.) Segmente landen im Stash 'last' (weiter mit render_video / export_scenes).",
         args_schema={
             "prompt": "str — natürliche Beschreibung des gewünschten Cuts (DE/EN/FR)",
             "duration_s": "float — Zieldauer in Sekunden (Default 60, Bereich 3-600)",
