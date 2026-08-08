@@ -1435,7 +1435,9 @@ async def _call_ollama(prompt: str) -> tuple[dict, dict]:
                 "prompt": prompt,
                 "format": "json",
                 "stream": False,
-                "options": {"temperature": TEMPERATURE},
+                # num_ctx élargi : le scratchpad ReAct + la liste d'outils dépassait
+                # le défaut 4096 → troncature → l'agent perdait le fil et rebouclait.
+                "options": {"temperature": TEMPERATURE, "num_ctx": 8192},
             },
         )
         r.raise_for_status()
