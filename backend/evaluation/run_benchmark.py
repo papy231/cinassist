@@ -90,7 +90,8 @@ def _embed_fn():
 
 async def run_one(bp: BenchmarkPrompt, clip_ids: list[str],
                   assemble_mode: str, top_k: int,
-                  speaker_map: dict[str, float]) -> dict:
+                  speaker_map: dict[str, float],
+                  use_query_rewrite: bool = False) -> dict:
     """Exécute les 3 phases (ou une baseline) + calcule les métriques pour UN prompt."""
     t_start = time.time()
 
@@ -116,7 +117,8 @@ async def run_one(bp: BenchmarkPrompt, clip_ids: list[str],
 
         # Phase 2
         async with AsyncSessionLocal() as db:
-            candidates = await retrieve_candidates(plan, clip_ids, db, top_k=top_k)
+            candidates = await retrieve_candidates(plan, clip_ids, db, top_k=top_k,
+                                                   use_query_rewrite=use_query_rewrite)
 
         # Phase 3
         timeline = await assemble_timeline(plan, candidates, mode=assemble_mode)
@@ -306,7 +308,8 @@ async def main_async(args) -> int:
             print(f"▶ {label} (target {bp.duration_s:.0f}s)", file=sys.stderr)
             t0 = time.time()
             try:
-                result = await run_one(bp, clip_ids, mode, args.top_k, speaker_map)
+                result = await run_one(bp, clip_ids, mode, args.top_k, speaker_map,
+                                       use_query_rewrite=args.query_rewrite)
                 m = result["metrics"]
                 print(f"  ✅ cov={_fmt(m['coverage_mean'])} · "
                       f"framing_p={_fmt(m['framing_precision'])} · "
@@ -351,6 +354,8 @@ def main() -> int:
                           "'baseline_no_filter', 'baseline_single_shot'. "
                           "Ex: 'heuristic,baseline_random,baseline_single_shot'"))
     ap.add_argument("--top-k", type=int, default=5)
+    ap.add_argument("--query-rewrite", action="store_true",
+                    help="Aktiviert llama3 Query-Rewriting vor CLIP-Embedding (Ablation).")
     ap.add_argument("--tag", type=str, default="",
                     help="Suffixe optionnel du dossier rapport (ex: 'improvements_v2')")
     args = ap.parse_args()

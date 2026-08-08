@@ -457,11 +457,24 @@ def _filter_scenes_tiered(pool: list[Szene], slot: dict,
     return [], "none"
 
 
+async def _rewrite_slot_intents(slots: list[dict]) -> dict[str, str]:
+    """Enrichit les intent_en de tous les slots via query rewriting (llama3),
+    en parallèle. Retourne {slot_id: rewritten_intent}. Fallback silencieux sur
+    l'intent original en cas d'échec (géré dans _rewrite_query)."""
+    import asyncio
+    from backend.api.search import _rewrite_query
+    intents = [(str(s.get("slot_id")),
+                (s.get("intent_en") or s.get("intent_de") or "")) for s in slots]
+    rewritten = await asyncio.gather(*[_rewrite_query(t) for _, t in intents])
+    return {sid: rw for (sid, _), rw in zip(intents, rewritten)}
+
+
 async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
                               db: AsyncSession, top_k: int = 5,
                               dedupe_across_slots: bool = True,
                               weight_clip: float = 0.6,
-                              weight_text: float = 0.4) -> dict:
+                              weight_text: float = 0.4,
+                              use_query_rewrite: bool = False) -> dict:
     """Phase 2 : pour chaque slot, ranke top-K scènes par score hybride
     (CLIP visuel + BM25 texte sur beschreibung + transkription) après filtres
     durs. Retourne un dict {slot_id: [candidate, ...]}.
@@ -498,6 +511,15 @@ async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
     w_clip = weight_clip / total_w
     w_text = weight_text / total_w
 
+    # Query rewriting optionnel : enrichit les intents avant embedding CLIP.
+    rewrite_map: dict[str, str] = {}
+    if use_query_rewrite:
+        try:
+            rewrite_map = await _rewrite_slot_intents(slots)
+        except Exception as e:
+            logger.warning(f"Query rewriting global failed, using raw intents: {e}")
+            rewrite_map = {}
+
     result: dict[str, list[dict]] = {}
     relaxations: dict[str, str] = {}
     used: set[str] = set()
@@ -513,10 +535,12 @@ async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
             result[slot_id] = []
             continue
 
-        # Composante CLIP (visuel) sur intent_en (fallback intent_de)
+        # Composante CLIP (visuel) sur intent_en (fallback intent_de),
+        # éventuellement enrichi par query rewriting.
         intent_en = slot.get("intent_en") or slot.get("intent_de") or ""
+        query_text = rewrite_map.get(slot_id, intent_en) if use_query_rewrite else intent_en
         try:
-            query_emb = _embed_text_lazy(intent_en)
+            query_emb = _embed_text_lazy(query_text)
         except Exception as e:
             logger.warning(f"CLIP embed failed for slot {slot_id}: {e}")
             result[slot_id] = []
@@ -589,6 +613,7 @@ async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
             "weight_clip": round(w_clip, 3),
             "weight_text": round(w_text, 3),
             "relaxation_tiers": relax_counts,
+            "query_rewrite": bool(use_query_rewrite),
         },
     }
 

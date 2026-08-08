@@ -137,6 +137,7 @@ class TimelineGenerateRequest(BaseModel):
     num_slots_hint: int | None = None
     top_k: int = 5
     dedupe_across_slots: bool = True
+    use_query_rewrite: bool = False        # llama3 enrichit les intents avant CLIP
     assemble_mode: str = "heuristic"       # "heuristic" | "llm"
     save_timeline: bool = True             # persist als Timeline-Zeile
     timeline_name: str | None = None
@@ -178,6 +179,7 @@ async def timeline_aus_prompt_generieren(
         plan, pool_ids, db,
         top_k=body.top_k,
         dedupe_across_slots=body.dedupe_across_slots,
+        use_query_rewrite=body.use_query_rewrite,
     )
     _log_stage("02_candidates", candidates, run_id)
 
