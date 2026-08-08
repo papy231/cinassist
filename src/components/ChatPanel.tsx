@@ -141,18 +141,18 @@ function LatencyBadge({ stats }: { stats: import("@/lib/chat-store").ChatLatency
  * (qwen2.5:14b) peut mettre 15-30s avant de produire son premier token — sans
  * ce visuel, l'utilisateur croit que ça bug.
  */
-function PreStreamIndicator({ startedAt }: { startedAt: number }) {
+function PreStreamIndicator({ startedAt, label = "Agent denkt nach…" }: { startedAt: number; label?: string }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
     const iv = setInterval(() => setElapsed(Math.floor((Date.now() - startedAt) / 1000)), 250);
     return () => clearInterval(iv);
   }, [startedAt]);
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#8a8a8a" }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11, color: "#8a8a8a", marginTop: 4 }}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#e5c100" strokeWidth="2.4" strokeLinecap="round" strokeDasharray="14 42" style={{ animation: "spin 0.9s linear infinite" }}>
         <circle cx="12" cy="12" r="9" />
       </svg>
-      <span>Agent denkt nach… <span style={{ fontFamily: "ui-monospace, monospace", color: "#7a7a7a" }}>{elapsed}s</span></span>
+      <span>{label} <span style={{ fontFamily: "ui-monospace, monospace", color: "#7a7a7a" }}>{elapsed}s</span></span>
     </div>
   );
 }
@@ -694,11 +694,18 @@ export default function ChatPanel() {
             {m.role === "assistant" && m.steps && m.steps.length > 0 && (
               <StreamingSteps steps={m.steps} collapsed={!m.isStreaming} />
             )}
-            {/* Phase muette avant le 1er event : Ollama pense (peut prendre 15-30s
-                sur qwen2.5:14b cold-start). On montre un spinner + timer pour que
-                le user sache que l'agent travaille. */}
-            {m.role === "assistant" && m.isStreaming && (!m.steps || m.steps.length === 0) && !m.content && (
-              <PreStreamIndicator startedAt={m.createdAt} />
+            {/* Spinner CONTINU tant que l'agent travaille (avant le 1er event ET
+                dans les gaps entre action→observation, qui peuvent durer 1-2 min
+                pendant une génération). Sinon la bulle paraît figée = bug perçu. */}
+            {m.role === "assistant" && m.isStreaming && !m.content && (
+              <PreStreamIndicator
+                startedAt={m.createdAt}
+                label={
+                  m.steps && m.steps.length > 0 && m.steps[m.steps.length - 1]?.type === "action"
+                    ? "Agent führt aus…"
+                    : "Agent denkt nach…"
+                }
+              />
             )}
             {m.content}
             {m.role === "assistant" && m.isStreaming && m.content && (
