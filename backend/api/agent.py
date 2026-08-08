@@ -606,6 +606,7 @@ async def _tool_generate_timeline_from_prompt(args: dict, db: AsyncSession) -> d
         "target_duration_s": duration_s,
         "skipped_slots": meta["skipped_slots"],
         "assemble_mode": meta["mode"],
+        "segments": segments,           # complet → ghost overlay (traceToProposals)
         "segments_preview": segments[:5],
         "stash_id": "last",
         "log_dir": f"backend/outputs/timeline_gen_logs/{run_id}/",
@@ -661,6 +662,7 @@ async def _tool_generate_story(args: dict, db: AsyncSession) -> dict:
         "segment_count": meta["segment_count"],
         "total_duration_s": meta["total_duration_s"],
         "pool_size": meta["pool_size"],
+        "segments": segments,           # complet → ghost overlay (traceToProposals)
         "segments_preview": segments[:5],
         "stash_id": "last",
         "log_dir": f"backend/outputs/timeline_gen_logs/{run_id}/",

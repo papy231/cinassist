@@ -832,6 +832,7 @@ def _heuristic_pick_and_trim(plan: dict, candidates: dict) -> tuple[list[dict], 
         scene_use_count[pick["scene_id"]] = n_prev + 1
         media_start = float(pick.get("start_zeit") or 0.0) + rel_start
         segments.append({
+            "clip_id": pick["clip_id"],
             "clip_path": pick["clip_path"],
             "clip_name": pick["clip_name"],
             "media_start": round(media_start, 3),
@@ -999,6 +1000,7 @@ async def _llm_pick_and_trim(plan: dict, candidates: dict,
 
         media_start = float(chosen.get("start_zeit") or 0.0) + rel_start
         segments.append({
+            "clip_id": chosen["clip_id"],
             "clip_path": chosen["clip_path"],
             "clip_name": chosen["clip_name"],
             "media_start": round(media_start, 3),
@@ -1252,6 +1254,7 @@ async def generate_story_from_pool(db: AsyncSession, clip_ids: list[str],
         media_start = float(scene.start_zeit or 0.0) + rel_start
         clip = scene.clip
         segments.append({
+            "clip_id": str(scene.clip_id),
             "clip_path": clip.dateipfad if clip else None,
             "clip_name": clip.dateiname if clip else None,
             "media_start": round(media_start, 3),
