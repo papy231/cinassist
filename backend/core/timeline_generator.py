@@ -235,11 +235,21 @@ def _build_planner_prompt(user_prompt: str, duration_s: float,
         f"\nRICHTWERT für Anzahl Slots: ca. {num_slots_hint}." if num_slots_hint else ""
     )
     pool_block = ""
+    cap_line = ""
     if pool_summary and pool_summary.get("total_scenes", 0) > 0:
         pool_block = "\n\n" + _format_pool_summary_for_prompt(pool_summary)
+        # Plafond dur : avec dédoublonnage, chaque scène ne remplit qu'un slot.
+        # Sur-planifier (mehr Slots als Szenen) garantit des trous → wir deckeln.
+        total_scenes = int(pool_summary["total_scenes"])
+        cap_line = (
+            f"\n\nHARTE OBERGRENZE: Es gibt nur {total_scenes} verschiedene Szenen im Pool. "
+            f"Erzeuge HÖCHSTENS {total_scenes} Slots und dehne stattdessen deren Dauer, "
+            f"um die Zieldauer zu erreichen. Lieber wenige, längere, passende Einstellungen "
+            f"als viele leere Slots."
+        )
     return (
         f"{PLANNER_SYSTEM_PROMPT}"
-        f"{pool_block}\n\n"
+        f"{pool_block}{cap_line}\n\n"
         f"=== AUFGABE ===\n"
         f"Zieldauer: {duration_s:.0f} Sekunden.\n"
         f"Beschreibung des gewünschten Cuts:\n{user_prompt.strip()}{hint_line}\n\n"
@@ -382,24 +392,69 @@ async def _fetch_scene_speaker_map(db: AsyncSession, scene_ids: list[str]) -> di
     return out
 
 
-def _passes_hard_filters(scene: Szene, slot: dict, speaker_map: dict[str, float]) -> bool:
-    """Filtres durs par slot avant scoring CLIP."""
-    # Durée : la scène doit pouvoir couvrir duration_min_s
-    if scene.dauer is None or scene.dauer < float(slot.get("duration_min_s", 0)) - 0.2:
-        return False
+def _passes_constraints(scene: Szene, slot: dict, speaker_map: dict[str, float],
+                        use_framing: bool, use_speaker: bool,
+                        use_dialogue: bool, use_duration: bool) -> bool:
+    """Vérifie un sous-ensemble configurable de contraintes du slot.
+
+    Utilisé par la relaxation graduée : on désactive les contraintes une à une
+    (framing → dialogue → speaker → durée) quand un slot ne trouve aucun
+    candidat, plutôt que de rendre un slot vide.
+    """
+    # Durée
+    if use_duration:
+        if scene.dauer is None or scene.dauer < float(slot.get("duration_min_s", 0)) - 0.2:
+            return False
+    else:
+        # Même en mode relâché, la scène doit rester montable.
+        if scene.dauer is None or scene.dauer < 1.0:
+            return False
     # Framing
-    fh = slot.get("framing_hint", "any")
-    if fh != "any" and scene.framing != fh:
-        return False
+    if use_framing:
+        fh = slot.get("framing_hint", "any")
+        if fh != "any" and scene.framing != fh:
+            return False
     # Speaker requirement
-    if slot.get("needs_speaker"):
+    if use_speaker and slot.get("needs_speaker"):
         if speaker_map.get(str(scene.id), 0.0) < 0.5:
             return False
     # Dialogue requirement
-    if slot.get("needs_dialogue"):
+    if use_dialogue and slot.get("needs_dialogue"):
         if not scene.transkription or len(scene.transkription.strip()) < 20:
             return False
     return True
+
+
+# Ordre de relaxation : on garde le plus longtemps possible les contraintes
+# « fortes » (speaker/dialogue = fidélité du sens) et on lâche d'abord les
+# « molles » (framing = préférence de cadrage, puis durée). Chaque tier est
+# tracé pour la thèse (skipped_ratio → coverage, précision par tier).
+_RELAX_TIERS = [
+    # (use_framing, use_speaker, use_dialogue, use_duration, label)
+    (True,  True,  True,  True,  "strict"),
+    (False, True,  True,  True,  "relaxed_framing"),
+    (False, True,  False, True,  "relaxed_framing+dialogue"),
+    (False, False, False, True,  "relaxed_visual_only"),
+    (False, False, False, False, "relaxed_all"),
+]
+
+
+def _filter_scenes_tiered(pool: list[Szene], slot: dict,
+                          speaker_map: dict[str, float]) -> tuple[list[int], str]:
+    """Renvoie (indices filtrés, label du tier utilisé).
+
+    Descend les tiers jusqu'à trouver au moins un candidat. Si même le tier le
+    plus permissif est vide (pool réellement vide), renvoie ([], "none").
+    """
+    for use_framing, use_speaker, use_dialogue, use_duration, label in _RELAX_TIERS:
+        idx = [
+            i for i, s in enumerate(pool)
+            if _passes_constraints(s, slot, speaker_map,
+                                   use_framing, use_speaker, use_dialogue, use_duration)
+        ]
+        if idx:
+            return idx, label
+    return [], "none"
 
 
 async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
@@ -444,13 +499,16 @@ async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
     w_text = weight_text / total_w
 
     result: dict[str, list[dict]] = {}
+    relaxations: dict[str, str] = {}
     used: set[str] = set()
+    last_used: str | None = None
 
     for slot in slots:
         slot_id = str(slot.get("slot_id"))
-        # Filtres durs
-        filtered_idx = [i for i, s in enumerate(pool)
-                        if _passes_hard_filters(s, slot, speaker_map)]
+        # Filtrage gradué : relâche les contraintes une à une plutôt que de
+        # rendre un slot vide (cf. _RELAX_TIERS).
+        filtered_idx, relax_label = _filter_scenes_tiered(pool, slot, speaker_map)
+        relaxations[slot_id] = relax_label
         if not filtered_idx:
             result[slot_id] = []
             continue
@@ -479,7 +537,10 @@ async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
                 for j, idx in enumerate(non_empty_idx):
                     text_scores_pool[idx] = float(raw[j]) / max_raw
 
-        # Score hybride sur les scènes filtrées
+        # Score hybride sur les scènes filtrées. Quand le framing a été relâché,
+        # on garde un petit bonus pour les scènes dont le cadrage colle quand même
+        # au slot : parmi des candidats « de compromis », le plus proche remonte.
+        fh = slot.get("framing_hint", "any")
         scored: list[tuple[float, float, float, Szene]] = []  # (combined, clip, text, scene)
         for i in filtered_idx:
             sc = pool[i]
@@ -490,17 +551,34 @@ async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
                 continue
             text_score = float(text_scores_pool[i])
             combined = w_clip * clip_score + w_text * text_score
+            if fh != "any" and sc.framing == fh:
+                combined += 0.03
             scored.append((combined, clip_score, text_score, sc))
 
         top = _pick_top_k_hybrid(scored, top_k, used if dedupe_across_slots else set())
+        if dedupe_across_slots and not top and scored:
+            # Pool épuisé par le dédoublonnage : plutôt qu'un slot vide, on
+            # réemploie une scène déjà utilisée (une prise longue peut servir
+            # à plusieurs slots via des in-points différents). On évite le
+            # doublon adjacent quand c'est possible.
+            avoid = {last_used} if last_used else set()
+            top = _pick_top_k_hybrid(scored, top_k, avoid)
+            if not top:
+                top = _pick_top_k_hybrid(scored, top_k, set())
+            if top:
+                relaxations[slot_id] = (relaxations.get(slot_id, "strict") + "+reuse")
         if dedupe_across_slots and top:
-            used.add(str(top[0][3].id))  # réserve seulement le top-1
+            last_used = str(top[0][3].id)
+            used.add(last_used)  # réserve seulement le top-1
         result[slot_id] = [_scene_to_candidate(combined, clip_s, text_s, sc)
                            for combined, clip_s, text_s, sc in top]
 
     wall = time.time() - t0
+    from collections import Counter
+    relax_counts = dict(Counter(relaxations.values()))
     return {
         "slots": result,
+        "relaxations": relaxations,
         "_meta": {
             "wall_s": round(wall, 2),
             "pool_size": len(pool),
@@ -510,6 +588,7 @@ async def retrieve_candidates(plan: dict, project_clip_ids: list[str],
             "dedupe_across_slots": dedupe_across_slots,
             "weight_clip": round(w_clip, 3),
             "weight_text": round(w_text, 3),
+            "relaxation_tiers": relax_counts,
         },
     }
 
@@ -694,15 +773,21 @@ def _heuristic_pick_and_trim(plan: dict, candidates: dict) -> tuple[list[dict], 
     de la décision par slot (pour la trace thèse).
     """
     slots_c = candidates.get("slots") or {}
+    relaxations = candidates.get("relaxations") or {}
     slots = plan.get("slots") or []
 
     segments: list[dict] = []
     decisions: list[dict] = []
+    scene_use_count: dict[str, int] = {}
 
     for slot in slots:
         sid = str(slot["slot_id"])
         picks = slots_c.get(sid, [])
-        decision: dict[str, Any] = {"slot_id": sid, "intent_de": slot.get("intent_de")}
+        decision: dict[str, Any] = {
+            "slot_id": sid,
+            "intent_de": slot.get("intent_de"),
+            "relaxation": relaxations.get(sid, "strict"),
+        }
         if not picks:
             decision["outcome"] = "skipped_no_candidate"
             decisions.append(decision)
@@ -710,6 +795,16 @@ def _heuristic_pick_and_trim(plan: dict, candidates: dict) -> tuple[list[dict], 
         pick = picks[0]
         target_dur = _target_duration_for_slot(slot, float(pick.get("dauer") or 0.0))
         rel_start, trim_strategy = smart_trim_start(pick, slot, target_dur)
+        # Réemploi : si la scène a déjà servi, décale la fenêtre pour produire
+        # un plan visuellement différent au lieu d'un doublon exact.
+        n_prev = scene_use_count.get(pick["scene_id"], 0)
+        if n_prev > 0:
+            scene_dauer = float(pick.get("dauer") or 0.0)
+            max_start = max(0.0, scene_dauer - target_dur)
+            if max_start > 0:
+                rel_start = round(min(max_start, (n_prev / (n_prev + 1)) * max_start), 3)
+                trim_strategy += "+reuse_offset"
+        scene_use_count[pick["scene_id"]] = n_prev + 1
         media_start = float(pick.get("start_zeit") or 0.0) + rel_start
         segments.append({
             "clip_path": pick["clip_path"],
@@ -823,6 +918,7 @@ async def _llm_pick_and_trim(plan: dict, candidates: dict,
 
     # Index candidats par (slot_id, scene_id) pour valider les picks
     slots_c = candidates.get("slots") or {}
+    relaxations = candidates.get("relaxations") or {}
     idx: dict[tuple[str, str], dict] = {}
     for sid, cand_list in slots_c.items():
         for c in cand_list:
@@ -835,7 +931,11 @@ async def _llm_pick_and_trim(plan: dict, candidates: dict,
 
     for slot in plan.get("slots") or []:
         sid = str(slot["slot_id"])
-        decision: dict[str, Any] = {"slot_id": sid, "intent_de": slot.get("intent_de")}
+        decision: dict[str, Any] = {
+            "slot_id": sid,
+            "intent_de": slot.get("intent_de"),
+            "relaxation": relaxations.get(sid, "strict"),
+        }
         pick_req = picks_by_slot.get(sid)
         cand_list = slots_c.get(sid) or []
         if not cand_list:
