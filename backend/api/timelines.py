@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.core.database import get_db, Timeline, Clip
 from backend.core.timeline_generator import (
     assemble_timeline,
+    generate_story_from_pool,
     plan_timeline,
     retrieve_candidates,
     summarize_pool,
@@ -218,6 +219,66 @@ async def timeline_aus_prompt_generieren(
             for sid, cands in (candidates.get("slots") or {}).items()
         },
         "timeline": timeline_data,
+        "saved_timeline_id": saved_id,
+        "pool_size_clips": len(pool_ids),
+    }
+
+
+# ─── Generierung « material-first » (erster Rohschnitt / Story) ───
+
+class TimelineStoryRequest(BaseModel):
+    clip_ids: list[str] | None = None      # None → alle "analysiert"-Clips
+    duration_s: float | None = None        # Zieldauer (optional, ca.)
+    save_timeline: bool = True
+    timeline_name: str | None = None
+
+
+@router.post("/generate-story")
+async def timeline_story_generieren(
+    body: TimelineStoryRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Material-first : baut aus dem VORHANDENEN Material die kohärenteste kurze
+    Geschichte (kein Prompt nötig). Erfindet nichts, was nicht im Pool ist —
+    ideal für einen ersten Rohschnitt."""
+    run_id = f"story_{int(time.time())}"
+    if body.clip_ids:
+        r = await db.execute(select(Clip.id).where(Clip.id.in_(body.clip_ids)))
+    else:
+        r = await db.execute(select(Clip.id).where(Clip.status == "analysiert"))
+    pool_ids = [str(cid) for (cid,) in r.all()]
+    if not pool_ids:
+        raise HTTPException(400, "Keine analysierten Clips im Pool gefunden.")
+
+    story = await generate_story_from_pool(db, pool_ids, target_duration_s=body.duration_s)
+    _log_stage("story", story, run_id)
+
+    if not story["segments"]:
+        raise HTTPException(422, "Keine Story aus dem Material generierbar (leerer Pool?).")
+
+    saved_id: str | None = None
+    if body.save_timeline:
+        name = body.timeline_name or (story.get("story_title") or "Auto-Rohschnitt")
+        payload = {
+            "segmente": story["segments"],
+            "gesamtdauer": story["_meta"]["total_duration_s"],
+            "story_title": story.get("story_title"),
+            "narrative_intent_de": story.get("narrative_intent_de"),
+            "decisions": story["decisions"],
+            "run_id": run_id,
+        }
+        tl = Timeline(name=name, stil="story_generiert", prompt=None, daten=payload,
+                      gesamtdauer=story["_meta"]["total_duration_s"])
+        db.add(tl)
+        await db.commit()
+        await db.refresh(tl)
+        saved_id = str(tl.id)
+
+    return {
+        "run_id": run_id,
+        "story_title": story.get("story_title"),
+        "narrative_intent_de": story.get("narrative_intent_de"),
+        "timeline": story,
         "saved_timeline_id": saved_id,
         "pool_size_clips": len(pool_ids),
     }

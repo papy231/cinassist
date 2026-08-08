@@ -1052,6 +1052,163 @@ async def assemble_timeline(plan: dict, candidates: dict,
     }
 
 
+# ─── Mode « material-first » : histoire depuis le pool ───────
+#
+# Approche inverse du pipeline prompt-driven : au lieu de partir d'une intention
+# et de chercher des scènes qui collent (risque de compromis quand le matériel
+# manque), on montre au LLM TOUT le matériel réel et on lui demande de bâtir la
+# story la plus cohérente POSSIBLE avec ça. Aucun plan inventé → pas de bas
+# scores de retrieval. Idéal pour un « premier montage » sur un pool arbitraire.
+
+STORY_SYSTEM_PROMPT = """Du bist ein erfahrener Cutter. Unten steht das GESAMTE
+verfügbare Rohmaterial (Szenen mit ID, Beschreibung, Cadrage, Dauer). Deine
+Aufgabe: daraus die kohärenteste kurze Geschichte / Stimmung bauen, die mit
+GENAU DIESEM Material möglich ist.
+
+REGELN:
+- Erfinde NICHTS, was nicht im Material vorkommt. Nutze nur vorhandene scene_id.
+- Ordne die gewählten Szenen dramaturgisch sinnvoll: Anfang → Entwicklung → Schluss.
+- Suche einen roten Faden (gemeinsames Thema, Stimmung, Zeitverlauf).
+- Gib pro gewählter Szene eine Dauer in Sekunden (>=1, <= Szenendauer).
+- Nutze nicht zwingend alle Szenen; lieber wenige passende als ein Sammelsurium.
+- Wenn eine Zieldauer vorgegeben ist, nähere die Gesamtdauer daran an (±20%).
+
+Antworte AUSSCHLIESSLICH mit gültigem JSON:
+{
+  "story_title": "kurzer Titel",
+  "narrative_intent_de": "1-2 Sätze zum roten Faden",
+  "segments": [
+    {"scene_id": "uuid...", "duration_s": 5.0, "reason_de": "warum diese Szene hier"}
+  ]
+}
+"""
+
+
+async def _fetch_story_pool(db: AsyncSession, clip_ids: list[str]) -> list[Szene]:
+    """Scènes analysables (embedding présent, hors Klappe) avec clip chargé."""
+    stmt = (
+        select(Szene)
+        .options(selectinload(Szene.clip))
+        .where(Szene.clip_id.in_(clip_ids))
+        .where(Szene.clip_embedding.isnot(None))
+    )
+    scenes = list((await db.execute(stmt)).scalars().all())
+    return [s for s in scenes if not _looks_like_klappe(s.beschreibung, s.start_zeit)]
+
+
+def _format_story_inventory(scenes: list[Szene]) -> str:
+    lines = []
+    for s in scenes:
+        desc = (s.beschreibung or "").strip().replace("\n", " ")[:140]
+        has_dlg = bool(s.transkription and len(s.transkription.strip()) >= 20)
+        lines.append(
+            f"- id={s.id} | cadrage={s.framing} | dauer={float(s.dauer or 0):.1f}s"
+            f" | dialog={'ja' if has_dlg else 'nein'} | {desc}"
+        )
+    return "\n".join(lines)
+
+
+async def generate_story_from_pool(db: AsyncSession, clip_ids: list[str],
+                                   target_duration_s: float | None = None,
+                                   temperature: float = 0.4) -> dict:
+    """Mode material-first : construit une timeline narrative à partir du pool réel.
+
+    Retourne un dict compatible avec assemble_timeline (segments render-ready +
+    decisions + _meta) pour réutiliser le reste de la chaîne (stash, render, UI).
+    """
+    t0 = time.time()
+    scenes = await _fetch_story_pool(db, clip_ids)
+    if not scenes:
+        return {"segments": [], "decisions": [],
+                "_meta": {"wall_s": 0.0, "mode": "story", "segment_count": 0,
+                          "total_duration_s": 0.0, "skipped_slots": 0, "pool_size": 0}}
+
+    by_id = {str(s.id): s for s in scenes}
+    target_line = (f"\nZieldauer: ca. {target_duration_s:.0f} Sekunden."
+                   if target_duration_s else "")
+    prompt = (
+        f"{STORY_SYSTEM_PROMPT}\n\n"
+        f"=== VERFÜGBARES MATERIAL ({len(scenes)} Szenen) ==={target_line}\n"
+        f"{_format_story_inventory(scenes)}\n\n"
+        "Generiere jetzt die Geschichte als JSON."
+    )
+    story, wall = await _call_ollama_json(prompt, temperature)
+
+    segments: list[dict] = []
+    decisions: list[dict] = []
+    scene_use_count: dict[str, int] = {}
+    for i, seg in enumerate(story.get("segments") or [], 1):
+        sid = str(seg.get("scene_id"))
+        scene = by_id.get(sid)
+        decision: dict[str, Any] = {"order": i, "scene_id": sid,
+                                    "reason_de": seg.get("reason_de")}
+        if not scene:
+            decision["outcome"] = "skipped_invalid_scene_id"
+            decisions.append(decision)
+            continue
+        scene_dauer = float(scene.dauer or 0.0)
+        try:
+            target_dur = float(seg.get("duration_s") or 0.0)
+        except (TypeError, ValueError):
+            target_dur = 0.0
+        target_dur = max(1.0, min(target_dur or 4.0, scene_dauer))
+        # Réutilise le trim intelligent (B-roll → min mots, dialogue → max mots).
+        pseudo_slot = {
+            "needs_dialogue": bool(scene.transkription and len(scene.transkription.strip()) >= 20),
+            "needs_speaker": False,
+            "duration_min_s": 1.0, "duration_max_s": scene_dauer,
+        }
+        scene_dict = {
+            "dauer": scene_dauer, "start_zeit": float(scene.start_zeit or 0.0),
+            "transkription_json": scene.transkription_json,
+        }
+        rel_start, trim_strategy = smart_trim_start(scene_dict, pseudo_slot, target_dur)
+        n_prev = scene_use_count.get(sid, 0)
+        if n_prev > 0:
+            max_start = max(0.0, scene_dauer - target_dur)
+            if max_start > 0:
+                rel_start = round(min(max_start, (n_prev / (n_prev + 1)) * max_start), 3)
+                trim_strategy += "+reuse_offset"
+        scene_use_count[sid] = n_prev + 1
+        media_start = float(scene.start_zeit or 0.0) + rel_start
+        clip = scene.clip
+        segments.append({
+            "clip_path": clip.dateipfad if clip else None,
+            "clip_name": clip.dateiname if clip else None,
+            "media_start": round(media_start, 3),
+            "duration": round(target_dur, 3),
+            "src_scene_id": sid,
+        })
+        decision.update({
+            "outcome": "picked",
+            "clip_name": clip.dateiname if clip else None,
+            "framing": scene.framing,
+            "target_duration_s": round(target_dur, 3),
+            "trim_start_in_scene_s": round(rel_start, 3),
+            "trim_strategy": trim_strategy,
+        })
+        decisions.append(decision)
+
+    total_dur = sum(float(s["duration"]) for s in segments)
+    return {
+        "story_title": story.get("story_title"),
+        "narrative_intent_de": story.get("narrative_intent_de"),
+        "segments": segments,
+        "decisions": decisions,
+        "_meta": {
+            "wall_s": round(time.time() - t0, 2),
+            "llm_wall_s": round(wall, 2),
+            "mode": "story",
+            "model": AGENT_MODEL,
+            "pool_size": len(scenes),
+            "segment_count": len(segments),
+            "total_duration_s": round(total_dur, 2),
+            "skipped_slots": sum(1 for d in decisions if d.get("outcome") != "picked"),
+            "target_duration_s": target_duration_s,
+        },
+    }
+
+
 # ─── Log helpers ─────────────────────────────────────────────
 
 def _log_stage(stage: str, payload: dict, run_id: str) -> Path:

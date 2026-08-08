@@ -710,6 +710,61 @@ async def _tool_generate_timeline_from_prompt(args: dict, db: AsyncSession) -> d
     }
 
 
+async def _tool_generate_story(args: dict, db: AsyncSession) -> dict:
+    """Material-first : baut aus dem VORHANDENEN Material die kohärenteste kurze
+    Geschichte — ohne Prompt. Erfindet nichts, was nicht im Pool ist. Ideal für
+    einen ersten Rohschnitt. Segmente landen im Stash 'last'."""
+    from backend.core.timeline_generator import generate_story_from_pool, _log_stage
+
+    duration_s = args.get("duration_s")
+    try:
+        duration_s = float(duration_s) if duration_s is not None else None
+    except (TypeError, ValueError):
+        duration_s = None
+
+    raw_clip_ids = args.get("clip_ids") or []
+    if isinstance(raw_clip_ids, str):
+        raw_clip_ids = [raw_clip_ids]
+    raw_clip_ids = [str(x).strip() for x in raw_clip_ids if x]
+    is_wildcard = any(x in ("*", "all", "tous", "alle") for x in raw_clip_ids)
+    if raw_clip_ids and not is_wildcard:
+        pool_ids = await _resolve_clip_ids(db, raw_clip_ids)
+    else:
+        pool_ids = []
+    if not pool_ids:
+        r = await db.execute(select(Clip.id).where(Clip.status == "analysiert"))
+        pool_ids = [str(cid) for (cid,) in r.all()]
+    if not pool_ids:
+        return {"error": "keine analysierten Clips im Projekt"}
+
+    run_id = f"story_{int(time.time())}"
+    try:
+        story = await generate_story_from_pool(db, pool_ids, target_duration_s=duration_s)
+        _log_stage("story", story, run_id)
+    except Exception as e:
+        logger.exception("generate_story failed")
+        return {"error": f"Story-Pipeline-Fehler: {e}", "run_id": run_id}
+
+    segments = story["segments"]
+    if not segments:
+        return {"error": "keine Story aus dem Material generierbar", "run_id": run_id}
+
+    await _stash_write("last", segments, db)
+    meta = story["_meta"]
+    return {
+        "run_id": run_id,
+        "story_title": story.get("story_title"),
+        "narrative_intent_de": story.get("narrative_intent_de"),
+        "segment_count": meta["segment_count"],
+        "total_duration_s": meta["total_duration_s"],
+        "pool_size": meta["pool_size"],
+        "segments_preview": segments[:5],
+        "stash_id": "last",
+        "log_dir": f"backend/outputs/timeline_gen_logs/{run_id}/",
+        "_hint": "Erster Rohschnitt im Stash 'last'. Weiter mit render_video / export_scenes.",
+    }
+
+
 async def _tool_render_video(args: dict, db: AsyncSession) -> dict:
     """Rend un MP4 depuis des segments avec aspect ratio et optional subtitles burnt."""
     from backend.core.render import render_mp4, _srt_from_whisper_segments
@@ -1277,6 +1332,15 @@ TOOLS: dict[str, Tool] = {
             "assemble_mode": "str — 'heuristic' (schnell, top-1 + Zentrum, Default) | 'llm' (qwen picke)",
         },
         handler=_tool_generate_timeline_from_prompt,
+    ),
+    "generate_story": Tool(
+        name="generate_story",
+        description="Material-first: baut OHNE Prompt aus dem VORHANDENEN Material die kohärenteste kurze Geschichte / den ersten Rohschnitt. Der LLM sieht das gesamte reale Rohmaterial (Szenenbeschreibungen, Cadrage, Dauer) und ordnet daraus einen roten Faden (Anfang→Entwicklung→Schluss) — erfindet NICHTS, was nicht existiert. Ideal wenn der Nutzer sagt 'mach mir einen ersten Schnitt / erzähl eine Geschichte mit dem was da ist'. Komplementär zu generate_timeline_from_prompt (das ist prompt-getrieben). Segmente landen im Stash 'last'.",
+        args_schema={
+            "duration_s": "float — ungefähre Zieldauer in Sekunden (optional)",
+            "clip_ids": "list[str] — zu nutzende Clips (Default: alle analysierten Clips)",
+        },
+        handler=_tool_generate_story,
     ),
     "retranscribe_clip": Tool(
         name="retranscribe_clip",
