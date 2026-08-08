@@ -1690,6 +1690,24 @@ async def run_agent_stream(req: AgentRunRequest, db: AsyncSession = Depends(get_
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
+class AgentChatRequest(BaseModel):
+    """Frontend-Kompatibilität: der Chat-Panel schickt `message` an
+    /api/agent/chat/stream (statt `prompt` an /run). Dünner Alias auf denselben
+    ReAct-Stream, damit die UI ohne weitere Änderungen funktioniert."""
+    message: str = Field(..., min_length=1)
+    timeline_state: dict | None = None
+
+
+@router.post("/chat/stream")
+async def chat_stream(req: AgentChatRequest, db: AsyncSession = Depends(get_db)):
+    """Alias SSE für den Chat-Panel (Body: {message, timeline_state})."""
+    async def event_gen():
+        async for evt in _run_agent(req.message, db, req.timeline_state):
+            yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
 @router.post("/run_sync")
 async def run_agent_sync(req: AgentRunRequest, db: AsyncSession = Depends(get_db)) -> dict:
     """Version non-streaming pour tests CLI : renvoie la trace complète en une fois."""
