@@ -10,7 +10,9 @@ from backend.core.skript.parser import parse_text, parse_datei
 from backend.core.skript.klappe import parse_klappe, klassifiziere_einheit, einheiten_aus_segmenten, analysiere_take
 from backend.core.skript.alignment import lexikalisch, _schwelle_fuer, SkriptZeileRef
 
-SKRIPT_PDF = Path("/Users/nikiema/Downloads/Document/Full_Script_-_Pinky_Promise.pdf")
+# Pfad zum Referenz-Drehbuch. Über CINASSIST_SKRIPT_PDF setzbar, sonst wird der Test
+# übersprungen. Das Drehbuch gehört zum Testbestand und liegt nicht im Repository.
+SKRIPT_PDF = Path(os.environ.get("CINASSIST_SKRIPT_PDF", "testdaten/Full_Script_-_Pinky_Promise.pdf"))
 
 MINI = """SHORTCUT WS 23/24
 “PINKY PROMISE”

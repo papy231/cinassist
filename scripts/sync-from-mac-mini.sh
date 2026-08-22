@@ -7,7 +7,9 @@
 set -e
 
 PROJ="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
-MC="pascalnikiema@macmini.tailef3707.ts.net"
+# Zugang zum Zweitrechner. Vor dem Lauf setzen, z. B.
+#   export CINASSIST_REMOTE="benutzer@rechner"
+MC="${CINASSIST_REMOTE:?CINASSIST_REMOTE ist nicht gesetzt}"
 
 echo "▶ Sync code from Mac mini → $PROJ"
 rsync -avz --delete \
