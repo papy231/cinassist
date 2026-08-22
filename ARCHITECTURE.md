@@ -130,6 +130,11 @@ Hochgeladene Videodatei
         ▼ SCHRITT 1 — ffprobe (Metadaten)
         │  Dauer, Auflösung, Codec, FPS, Dateigröße
         │
+        ▼ SCHRITT 1b — Verknüpfter Ton (Sync-Modell, nur Clips mit take_id)
+        │  Take → primärer TakeAudioLink → Spur „Record“ um offset_s ausgerichtet
+        │  (atrim / adelay, 48 kHz) → Basis für Proxy-Ton, Waveform, Whisper
+        │  ohne Link: Kamera-Spur + Warnung „Transkription auf Kamera-Ton“
+        │
         ▼ SCHRITT 2 — FFmpeg (Audio-Extraktion)
         │  → WAV 16 kHz Mono → /temp/{job_id}.wav
         │
@@ -266,6 +271,20 @@ Lange Szenen werden vor dem Algorithmus unterteilt. Schnittpunkte werden an **Wh
 | `DELETE` | `/api/timelines/{id}` | Timeline löschen |
 | `POST` | `/api/export` | MP4-Export starten (FFmpeg, async Job) |
 | `WS` | `/ws/jobs/{job_id}` | Echtzeit Job-Fortschritt |
+| `POST` | `/api/import/ordner` | Ordner (video/audio) **per Referenz** importieren — Scan, ffprobe, BWF/iXML, LTC (Celery-Job) |
+| `GET` / `DELETE` | `/api/import/ordner[/{id}]` | Importe auflisten / aus der DB entfernen (Dateien bleiben) |
+| `POST` | `/api/sync/run` | Matching-Kaskade Timecode → Wellenform → Klappe → Dateiname (Celery-Job) |
+| `GET` | `/api/sync/takes` · `/api/sync/assets` | Takes (Status/Methode/Offset/Begründung/Kandidaten) · Assets |
+| `POST` | `/api/sync/takes/{id}/bestaetigen` · `/ablehnen` · `/verwaist-bestaetigen` · `/links` · `/vorschau` | manuelle Entscheidungen, Audio anhängen, A/B-Vorschau-Derivate |
+| `PATCH` / `DELETE` | `/api/sync/links/{id}` | Offset ±ms anpassen / Audio abhängen |
+| `POST` | `/api/sync/analyse-starten` | Clips aus Takes erzeugen + Ingestion; **409**, solange ein Take `unklar` ist |
+| `GET` | `/api/sync/media/{clip\|asset}/{id}` | Original per Referenz ausliefern (HTTP Range) |
+| `POST` | `/api/sync/zuruecksetzen` | Sync-Zustand löschen (Importe/Assets/Takes/Sync-Clips/Vorschauen; Originale bleiben) |
+| `GET` / `POST` / `PATCH` / `DELETE` | `/api/ordner[/{id}]` | Medien-Ordner (Bins): Baum, anlegen, umbenennen/verschieben, löschen (Clips bleiben) |
+| `POST` | `/api/ordner/verschieben` | Clips in einen Ordner verschieben |
+| `POST` | `/api/ordner/importieren` | Video-Ordner per Referenz → Medien-Ordner + Clips + Analyse (Celery) |
+
+Details, Kaskade und Grenzen: `backend/core/sync/README.md`.
 
 ---
 
@@ -384,6 +403,42 @@ timelines
 ├── name, stil, prompt
 ├── daten (JSON -- vollständige Segmentsequenz)
 └── gesamtdauer
+
+ordner_importe                        -- Sync-Modell (Ordner per Referenz)
+├── id (UUID, PK)
+├── pfad, typ (video|audio), status
+├── anzahl_dateien, anzahl_ignoriert (._* u. ä.)
+└── volume_uuid, volume_root
+
+media_assets                          -- eine physische Datei, referenziert, nie kopiert
+├── id (UUID, PK)
+├── typ, pfad (absolut), dateiname, dauer_s, sample_rate, kanaele, fps, codec, dateigroesse
+├── tc_start, tc_start_s, tc_quelle (bwf|ixml|ltc|container|keine), tc_rate, tc_flag
+├── ixml_json, fingerprint (unique), ordner_import_id (FK)
+├── ltc_kanal, scratch_kanal, record_kanal, container_tc
+└── szene, plan, prise, unbekannte_markierung, datum, warnungen
+
+takes                                 -- Arbeitseinheit: 1 Video + 0..n Audios
+├── id (UUID, PK)
+├── video_asset_id (FK, NULL = Ton ohne Bild)
+├── szene, plan, prise
+├── status (sicher|plausibel|unklar|verwaist|manuell_bestaetigt|manuell_abgelehnt)
+└── warnungen, kandidaten_json, automatisch
+
+take_audio_links
+├── id (UUID, PK)
+├── take_id (FK), audio_asset_id (FK)
+├── offset_s (audio_start − video_start), methode (timecode|waveform|klappe|dateiname|manuell|verwaist)
+├── konfidenz, begruendung, kanal_fuer_transkription
+└── warnungen, bestaetigt
+
+clips.take_id (FK, nullable)          -- Clip = dünne Schicht über einem Take (dateipfad = Original)
+
+medien_ordner                         -- Bins im Medien-Panel (Baum)
+├── id (UUID, PK)
+├── name, eltern_id (FK self, CASCADE), quelle_pfad
+└── erstellt_am
+clips.ordner_id (FK, nullable)        -- NULL = Wurzel
 ```
 
 ---

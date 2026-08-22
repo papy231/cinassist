@@ -1,30 +1,36 @@
 import type { NextConfig } from "next";
 
+// Ziel-Backend. Die Voreinstellung ist die bisherige Instanz auf Port 8001.
+// Über CINASSIST_BACKEND_URL lässt sich eine zweite, getrennte Instanz ansteuern,
+// etwa ein weiteres Projekt mit eigener Datenbank und eigenem Medienordner.
+const BACKEND = process.env.CINASSIST_BACKEND_URL ?? "http://localhost:8001";
+
 const nextConfig: NextConfig = {
   devIndicators: false,
-  // Uploads de vidéos jusqu'à 5 GB — même limite que le backend FastAPI. Sans ça,
-  // Next tronque à 10 MB par défaut et le proxy vers /api/clips/upload casse.
+  // Video-Uploads bis 5 GB, dieselbe Grenze wie im FastAPI-Backend. Ohne diese
+  // Angabe kappt Next bei 10 MB und der Weiterreichung an /api/clips/upload bricht ab.
   experimental: {
     proxyClientMaxBodySize: "5gb" as unknown as number,
   },
-  // Next 15+ bloque les requêtes dev depuis d'autres hosts que localhost pour
-  // éviter le DNS-rebinding. On whitelist explicitement le tailnet + éventuellement
-  // d'autres URLs (funnel, IP locale, etc.).
+  // Ab Next 15 werden Anfragen aus der Entwicklungsumgebung nur von localhost
+  // angenommen, um DNS-Rebinding zu verhindern. Das Tailnet und weitere Adressen
+  // werden hier ausdrücklich zugelassen.
   allowedDevOrigins: [
     "macmini.tailef3707.ts.net",
     "*.tailef3707.ts.net",
     "100.102.28.112",
     "localhost",
   ],
-  // Proxy /api/* + /uploads/* + /proxies/* + /outputs/* vers le backend FastAPI :8001
-  // Same-origin depuis le frontend → pas de CORS, pas besoin d'exposer :8001 séparément.
+  // /api, /uploads, /proxies, /outputs und /temp werden an das Backend weitergereicht.
+  // Aus Sicht des Browsers liegt damit alles auf derselben Herkunft, es entfällt
+  // sowohl CORS als auch die Notwendigkeit, den Backend-Port getrennt zu öffnen.
   async rewrites() {
     return [
-      { source: "/api/:path*",     destination: "http://localhost:8001/api/:path*" },
-      { source: "/uploads/:path*", destination: "http://localhost:8001/uploads/:path*" },
-      { source: "/proxies/:path*", destination: "http://localhost:8001/proxies/:path*" },
-      { source: "/outputs/:path*", destination: "http://localhost:8001/outputs/:path*" },
-      { source: "/temp/:path*",    destination: "http://localhost:8001/temp/:path*" },
+      { source: "/api/:path*",     destination: `${BACKEND}/api/:path*` },
+      { source: "/uploads/:path*", destination: `${BACKEND}/uploads/:path*` },
+      { source: "/proxies/:path*", destination: `${BACKEND}/proxies/:path*` },
+      { source: "/outputs/:path*", destination: `${BACKEND}/outputs/:path*` },
+      { source: "/temp/:path*",    destination: `${BACKEND}/temp/:path*` },
     ];
   },
 };

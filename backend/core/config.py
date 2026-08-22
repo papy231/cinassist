@@ -5,8 +5,8 @@ from pathlib import Path
 
 # ─── Pfade ───────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parent.parent
-# CINASSIST_DATA_DIR override: isole media (uploads/proxies/outputs/temp) pour
-# les instances secondaires (ex. instance prof en démo publique).
+# CINASSIST_DATA_DIR setzt den Pfad neu und trennt die Medien (uploads, proxies, outputs, temp) für
+# für weitere Instanzen, etwa eine getrennte Vorführ-Installation.
 DATA_DIR = Path(os.getenv("CINASSIST_DATA_DIR", str(BASE_DIR)))
 UPLOAD_DIR = DATA_DIR / "uploads"
 OUTPUT_DIR = DATA_DIR / "outputs"
@@ -38,6 +38,13 @@ CLIP_MODEL = os.getenv("CLIP_MODEL", "ViT-L-14")
 CLIP_PRETRAINED = os.getenv("CLIP_PRETRAINED", "datacomp_xl_s13b_b90k")
 # Anzahl Frames pro Szene für das visuelle Embedding (Mittelung → robuster als 1 Frame).
 CLIP_FRAMES = int(os.getenv("CLIP_FRAMES", "3"))
+# Bildanalyse (Stichproben-Frames je Szene): ein Frame alle N Sekunden, min/max Anzahl, und
+# Ähnlichkeitsschwelle (CLIP-Kosinus), ab der ein Frame als „gleich wie der vorige“ gilt und NICHT
+# neu beschrieben wird (spart ~6 s Bildmodell je Frame, ohne Abdeckung zu verlieren).
+BILD_INTERVALL_S = float(os.getenv("BILD_INTERVALL_S", "30"))
+BILD_MIN_FRAMES = int(os.getenv("BILD_MIN_FRAMES", "1"))
+BILD_MAX_FRAMES = int(os.getenv("BILD_MAX_FRAMES", "12"))
+BILD_GLEICH_SCHWELLE = float(os.getenv("BILD_GLEICH_SCHWELLE", "0.93"))
 
 # ─── Cloud LLM Provider (optionale API-Keys) ─────────────
 # Anthropic Claude (z.B. claude-3-5-sonnet-20241022, claude-3-opus-20240229)

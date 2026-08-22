@@ -95,6 +95,7 @@ export type InsertCmd = {
   mode: "append" | "insert" | "overwrite";
   duration?: number;       // secondes ; défaut = toute la durée source
   mediaStart?: number;     // secondes ; défaut = 0
+  videoOnly?: boolean;     // Alternative/Cutaway: Bild ohne Ton — Master-Ton läuft weiter
 };
 
 /** Set fade in ou out (durée + courbe optionnelle). */
@@ -142,6 +143,10 @@ export type LoadSequenceCmd = {
     mediaStart: number;
     duration: number;
     name?: string;
+    /** Absolute Timeline-Position — gesetzt für Overlays (Alternativen/Cutaways); ohne = sequenziell auf V1. */
+    start?: number;
+    videoTrackIndex?: number;
+    videoOnly?: boolean;
   }>;
   replace: boolean;
 };
@@ -177,7 +182,7 @@ export type Proposal = {
   createdBy: "agent" | "user" | "deterministic";
   createdAt: number;             // Date.now() côté server ou passé en args
   edits: TimelineCmd[];
-  status: "pending" | "accepted" | "rejected" | "partial";
+  status: "pending" | "previewing" | "accepted" | "rejected" | "partial";
   /** Pour la traçabilité de la Bachelorarbeit : quel outil / prompt a produit
    *  cette proposal ; sert aux métriques d'acceptation. */
   provenance?: {
@@ -248,6 +253,13 @@ export interface TimelineCommandExecutor {
   /** Snapshot du state timeline courant — envoyé au backend agent pour qu'il
    *  raisonne sur ce qui est actuellement sur la timeline utilisateur. */
   getSnapshot: () => TimelineSnapshot;
+  /** Vorschau-Modus: vollständigen Timeline-Zustand sichern/wiederherstellen (opak für den Store).
+   *  Damit kann eine Proposal PROBEWEISE angewandt werden — Annehmen behält sie, Verwerfen stellt exakt zurück. */
+  captureState: () => unknown;
+  restoreState: (state: unknown) => void;
+  /** Persistiert die AKTUELLE Timeline als benannte Fassung (Backend). Vom Store nach dem Annehmen
+   *  einer Sequenz-Proposal aufgerufen — erst Annehmen speichert, die Vorschau nie. */
+  persist?: (label: string) => void;
 }
 
 /**

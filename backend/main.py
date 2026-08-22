@@ -20,14 +20,18 @@ from backend.api.clips import router as clips_router
 from backend.api.timelines import router as timelines_router
 from backend.api.ai import router as ai_router
 # DEPRECATED : chat.py = ancien flow "guided cutting" (katalog + [VORSCHLAG:] tag),
-# remplacé par agent.py (ReAct + tools). Aucun call frontend depuis le refactor
-# streaming SSE — désactivé pour éviter les deux personas parallèles avec des
-# system prompts divergents. Fichier conservé pour référence Bachelorarbeit.
+# abgelöst durch agent.py, ReAct samt Werkzeugen. Seit dem Umbau ruft die Oberfläche es nicht mehr auf
+# SSE-Streaming; abgeschaltet, um zwei parallele Assistenzrollen mit
+# abweichenden Systemanweisungen zu vermeiden. Datei bleibt als Beleg erhalten.
 # from backend.api.chat import router as chat_router
 from backend.api.websocket import router as ws_router
 from backend.api.export import router as export_router
 from backend.api.search import router as search_router
 from backend.api.agent import router as agent_router
+from backend.api.sync import router as sync_router
+from backend.api.ordner import router as ordner_router
+from backend.api.skript import router as skript_router
+from backend.api.projekt import router as projekt_router
 
 
 @asynccontextmanager
@@ -151,11 +155,15 @@ app.mount("/temp", StaticFiles(directory=str(TEMP_DIR)), name="temp")
 app.include_router(clips_router)
 app.include_router(timelines_router)
 app.include_router(ai_router)
-# app.include_router(chat_router)  # désactivé — voir note d'import
+# app.include_router(chat_router)  # abgeschaltet, siehe Hinweis beim Import
 app.include_router(ws_router)
 app.include_router(export_router)
 app.include_router(search_router)
 app.include_router(agent_router)
+app.include_router(sync_router)
+app.include_router(ordner_router)
+app.include_router(skript_router)
+app.include_router(projekt_router)
 
 
 @app.get("/")
@@ -171,6 +179,51 @@ async def root():
             "job_status": "ws://localhost:8000/ws/jobs/{job_id}",
         },
     }
+
+
+@app.get("/api/system/transkription")
+def transkription_einstellungen_lesen():
+    from backend.core import einstellungen as E
+    return E.transkription()
+
+
+@app.get("/api/system/projekt")
+def projekt_einstellungen_lesen():
+    from backend.core import einstellungen as E
+    return E.projekt()
+
+
+@app.put("/api/system/projekt")
+async def projekt_einstellungen_setzen(request: Request):
+    from backend.core import einstellungen as E
+    body = await request.json()
+    kontext = str(body.get("kontext") or "")[:2000]
+    neu = {"kontext": kontext}
+    if "max_sprecher" in body:
+        v = body.get("max_sprecher")
+        try:
+            neu["max_sprecher"] = int(v) if v not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            raise HTTPException(400, "max_sprecher: Zahl oder leer")
+        if neu["max_sprecher"] is not None and not (1 <= neu["max_sprecher"] <= 20):
+            raise HTTPException(400, "max_sprecher: 1–20")
+    E.speichere({"projekt": neu})
+    return E.projekt()
+
+
+@app.put("/api/system/transkription")
+async def transkription_einstellungen_setzen(request: Request):
+    from backend.core import einstellungen as E
+    body = await request.json()
+    erlaubt = {k: body[k] for k in ("sprache", "glossar", "modell", "kanal") if k in body}
+    if "glossar" in erlaubt and isinstance(erlaubt["glossar"], str):
+        erlaubt["glossar"] = [g.strip() for g in re.split(r"[,\n;]+", erlaubt["glossar"]) if g.strip()]
+    if erlaubt.get("modell") not in (None, "turbo", "qualitaet"):
+        raise HTTPException(400, "modell: turbo | qualitaet")
+    if erlaubt.get("kanal") not in (None, "sprachreichster", "record"):
+        raise HTTPException(400, "kanal: sprachreichster | record")
+    E.speichere({"transkription": erlaubt})
+    return E.transkription()
 
 
 @app.get("/api/system/config")

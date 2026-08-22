@@ -36,6 +36,11 @@ export interface EngineClip {
   fadeOutCurve?: number;
   /** Constant clip gain in decibels. 0 dB = unity. Multiplies volume on top of master + fades. */
   gainDb?: number;
+  /** Audio-only source (music/voice file): lives on an audio track only, played by the AudioPool. */
+  audioOnly?: boolean;
+  /** Video-only clip (cutaway, silent insert): its own audio stays muted even when it is the visible clip —
+   *  audio comes from an audio track (e.g. the master's audio bridge under an L-cut). */
+  videoOnly?: boolean;
 }
 
 /** Clips sorted by timelineStart, no overlap. Enforced by normalize(). */
@@ -92,7 +97,7 @@ export type TLClip = {
   sourceDuration?: number;
   /** Whether the clip carries an audio stream (drives the audio track split). */
   hasAudio?: boolean;
-  /** Which video track this clip lives on (0 = V1 = top priority). Default 0. */
+  /** Which video track this clip lives on (0 = V1 = unterste Spur; höhere Spuren liegen darüber und gewinnen). Default 0. */
   videoTrackIndex?: number;
   /** Which audio track this clip's audio lives on. Defaults to videoTrackIndex. */
   audioTrackIndex?: number;
@@ -106,6 +111,8 @@ export type TLClip = {
   fadeOutCurve?: number;
   /** Clip-level gain in dB (rubber band). 0 dB = unity. */
   gainDb?: number;
+  /** Audio-only media (mp3/wav …): no video part; placed on an audio track only. */
+  audioOnly?: boolean;
 };
 
 /**
@@ -116,8 +123,8 @@ export type TLClip = {
  * (`v0`, `v1`, … then `a0`, `a1`, …) — these match the UI track ids so
  * per-track UI state (hidden/solo/mute) keys straight onto engine tracks.
  *
- * Track convention (documented for the compositor): index 0 = V1 = the
- * TOP-PRIORITY video track. The compositor walks video tracks 0→N and the
+ * Track convention (documented for the compositor): index 0 = V1 = unterste
+ * Spur; der Compositor läuft von der OBERSTEN Spur nach unten, die erste mit Clip gewinnt. The compositor walks video tracks N→0 and the
  * FIRST that has a clip at `t` wins (Premiere/simple convention).
  *
  * Video track `i` gets clips whose `videoTrackIndex === i`. Audio track `i`
@@ -149,7 +156,7 @@ export function tlClipsToEngineTracks(
   const clampIdx = (i: number, n: number) =>
     Math.max(0, Math.min(n - 1, Math.floor(i) || 0));
 
-  type Built = { clip: EngineClip; vIdx: number; aIdx: number; hasAudio: boolean };
+  type Built = { clip: EngineClip; vIdx: number; aIdx: number; hasAudio: boolean; audioOnly: boolean };
   const built: Built[] = [];
   for (const c of tlClips) {
     const proxyOk = c.proxyUrl && !(brokenProxies?.has(c.proxyUrl));
@@ -178,10 +185,13 @@ export function tlClipsToEngineTracks(
         ...(fadeInCurve ? { fadeInCurve } : {}),
         ...(fadeOutCurve ? { fadeOutCurve } : {}),
         ...(gainDb ? { gainDb } : {}),
+        ...(c.audioOnly ? { audioOnly: true } : {}),
+        ...(c.hasAudio === false && !c.audioOnly ? { videoOnly: true } : {}),
       },
       vIdx,
       aIdx,
-      hasAudio: !!c.hasAudio,
+      hasAudio: !!c.hasAudio || !!c.audioOnly,
+      audioOnly: !!c.audioOnly,
     });
   }
 
@@ -191,7 +201,7 @@ export function tlClipsToEngineTracks(
       normalize({
         id: `v${i}`,
         kind: "video",
-        clips: built.filter((b) => b.vIdx === i).map((b) => b.clip),
+        clips: built.filter((b) => b.vIdx === i && !b.audioOnly).map((b) => b.clip),
       }),
     );
   }

@@ -2,17 +2,17 @@
 Pre-compute CLIP text embeddings for the cinematic prompts used by the
 KI-Schnitt-Algorithmus (Structured Cut).
 
-Ce script est exécuté UNE SEULE FOIS (manuellement ou lors du setup) :
-il encode chaque prompt textuel via le text encoder de CLIP ViT-B/32
-et sauvegarde les vecteurs 512-dim dans backend/data/prompt_embeddings.json.
+Dieses Skript läuft nur EIN EINZIGES MAL, von Hand oder bei der Einrichtung:
+es kodiert jede Texteingabe über den Textkodierer von CLIP ViT-B/32
+und sichert die 512-stelligen Vektoren in backend/data/prompt_embeddings.json.
 
-Au runtime, ai.py charge ce JSON et calcule des scores de scènes par
-similarité cosinus image↔texte, sans jamais avoir à recharger CLIP.
+Zur Laufzeit lädt ai.py diese JSON-Datei und bewertet Szenen über die
+Kosinusähnlichkeit zwischen Bild und Text, ohne CLIP je erneut zu laden.
 
 Référence : Radford et al. (2021) "Learning Transferable Visual Models
 From Natural Language Supervision" — ICML 2021.
 
-Lancer avec :
+Aufruf:
     python -m backend.tools.build_prompt_embeddings
 ou directement :
     .venv/bin/python backend/tools/build_prompt_embeddings.py

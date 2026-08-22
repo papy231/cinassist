@@ -1,0 +1,243 @@
+[
+  {
+    "meta": {
+      "prompt": {
+        "id": "broll_nature_short",
+        "prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "duration_s": 15,
+        "profile": "broll_nature",
+        "notes": "Court, doit filtrer wide_no_person, éviter dialogue accidentel"
+      },
+      "assemble_mode": "heuristic",
+      "top_k": 5
+    },
+    "metrics": {
+      "target_duration_s": 15,
+      "actual_duration_s": 15.0,
+      "duration_deviation_s": 0.0,
+      "duration_deviation_pct": 0.0,
+      "n_segments": 4,
+      "unique_clips": 4,
+      "clip_diversity": 1.0,
+      "framing_distribution": {
+        "wide_no_person": 4
+      },
+      "framing_entropy": -0.0,
+      "avg_top1_score": 0.332,
+      "min_top1_score": 0.1694,
+      "max_top1_score": 0.4596,
+      "avg_top1_top2_gap": 0.0953,
+      "n_slots_planned": 4,
+      "n_slots_picked": 4,
+      "n_slots_skipped": 0,
+      "skipped_ratio": 0.0,
+      "trim_strategy_distribution": {
+        "centered_default+dur_norm": 4
+      },
+      "framing_precision": 1.0,
+      "speaker_precision": null,
+      "dialogue_precision": null,
+      "n_speaker_constrained": 0,
+      "n_dialogue_constrained": 0,
+      "coverage_mean": 0.1256,
+      "coverage_min": -0.0173,
+      "coverage_max": 0.4145,
+      "coverage_per_slot": [
+        {
+          "slot_id": "1",
+          "score": 0.0047
+        },
+        {
+          "slot_id": "2",
+          "score": -0.0173
+        },
+        {
+          "slot_id": "3",
+          "score": 0.4145
+        },
+        {
+          "slot_id": "4",
+          "score": 0.1006
+        }
+      ],
+      "wall_total_s": 84.05,
+      "wall_pool_summary_s": 0.05,
+      "wall_plan_s": 72.28,
+      "wall_retrieve_s": 11.7,
+      "wall_assemble_s": 0.0,
+      "pool_size": 63,
+      "prompt_id": "broll_nature_short",
+      "profile": "broll_nature",
+      "assemble_mode": "heuristic",
+      "prompt_text": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen"
+    },
+    "plan": {
+      "narrative_intent_de": "Ruhige Naturaufnahmen von Wasser und Landschaft ohne menschliche Präsenz",
+      "target_duration_s": 15,
+      "planned_total_duration_s": 14.8,
+      "slots": [
+        {
+          "slot_id": 1,
+          "intent_de": "Weitwinkel-Bild eines ruhigen Sees im Morgenlicht",
+          "intent_en": "wide shot of a calm lake at dawn",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Atmosphärisch, ruhig, sanft einleitend"
+        },
+        {
+          "slot_id": 2,
+          "intent_de": "Wellen am Strand im Sonnenaufgang",
+          "intent_en": "waves on the beach at sunrise",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Romantisch, friedlich"
+        },
+        {
+          "slot_id": 3,
+          "intent_de": "Landschaft mit sanftem Fluss und grünen Hügeln",
+          "intent_en": "landscape with a gentle river and green hills",
+          "duration_min_s": 4.0,
+          "duration_max_s": 6.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Idyllisch, friedlich"
+        },
+        {
+          "slot_id": 4,
+          "intent_de": "Stillwasser mit reflektierendem Himmel und Bäumen am Ufer",
+          "intent_en": "still water reflecting the sky and trees at the shore",
+          "duration_min_s": 3.0,
+          "duration_max_s": 5.0,
+          "framing_hint": "wide_no_person",
+          "needs_speaker": false,
+          "needs_dialogue": false,
+          "notes_de": "Ruhig, harmonisch"
+        }
+      ],
+      "_meta": {
+        "wall_s": 72.28,
+        "model": "qwen2.5:14b",
+        "temperature": 0.3,
+        "user_prompt": "15 Sekunden ruhige Naturaufnahmen, Wasser und Landschaft, keine Menschen",
+        "pool_aware": true
+      }
+    },
+    "timeline_summary": {
+      "wall_s": 0.0,
+      "mode": "heuristic",
+      "segment_count": 4,
+      "total_duration_s": 15.0,
+      "skipped_slots": 0,
+      "llm": {}
+    },
+    "decisions": [
+      {
+        "slot_id": "1",
+        "intent_de": "Weitwinkel-Bild eines ruhigen Sees im Morgenlicht",
+        "relaxation": "strict",
+        "outcome": "picked",
+        "scene_id": "0326dcb1-281b-4171-a735-4aa091332936",
+        "clip_name": "PPRM23_S001_S001_T011.MOV",
+        "clip_score": -0.0163,
+        "text_score": 0.9754,
+        "score": 0.4104,
+        "target_duration_s": 3.588,
+        "trim_start_in_scene_s": 13.292,
+        "trim_strategy": "centered_default+dur_norm",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "05be8790-60e2-4bf7-975a-c5b4df8a1c07",
+            "score": 0.3487
+          },
+          {
+            "scene_id": "2864e119-837d-43d9-9876-d8bbdb4df1b1",
+            "score": 0.2645
+          }
+        ]
+      },
+      {
+        "slot_id": "2",
+        "intent_de": "Wellen am Strand im Sonnenaufgang",
+        "relaxation": "strict",
+        "outcome": "picked",
+        "scene_id": "05be8790-60e2-4bf7-975a-c5b4df8a1c07",
+        "clip_name": "PPRM23_S001_S001_T006.MOV",
+        "clip_score": -0.0793,
+        "text_score": 0.7651,
+        "score": 0.2885,
+        "target_duration_s": 3.588,
+        "trim_start_in_scene_s": 4.188,
+        "trim_strategy": "centered_default+dur_norm",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "ab381195-13c9-4dbb-9f2f-74306749915c",
+            "score": 0.2024
+          },
+          {
+            "scene_id": "fa375ae8-de21-4e60-835b-04cf0525c119",
+            "score": 0.1764
+          }
+        ]
+      },
+      {
+        "slot_id": "3",
+        "intent_de": "Landschaft mit sanftem Fluss und grünen Hügeln",
+        "relaxation": "strict",
+        "outcome": "picked",
+        "scene_id": "ab381195-13c9-4dbb-9f2f-74306749915c",
+        "clip_name": "PPRM23_S001_S001_T004.MOV",
+        "clip_score": 0.0494,
+        "text_score": 1.0,
+        "score": 0.4596,
+        "target_duration_s": 4.235,
+        "trim_start_in_scene_s": 7.729,
+        "trim_strategy": "centered_default+dur_norm",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "2864e119-837d-43d9-9876-d8bbdb4df1b1",
+            "score": 0.2373
+          },
+          {
+            "scene_id": "2106a207-5de5-4d86-870b-406d3f7e081a",
+            "score": 0.1957
+          }
+        ]
+      },
+      {
+        "slot_id": "4",
+        "intent_de": "Stillwasser mit reflektierendem Himmel und Bäumen am Ufer",
+        "relaxation": "strict",
+        "outcome": "picked",
+        "scene_id": "2864e119-837d-43d9-9876-d8bbdb4df1b1",
+        "clip_name": "PPRM23_S001_S001_T003.MOV",
+        "clip_score": 0.0119,
+        "text_score": 0.3307,
+        "score": 0.1694,
+        "target_duration_s": 3.588,
+        "trim_start_in_scene_s": 16.104,
+        "trim_strategy": "centered_default+dur_norm",
+        "framing": "wide_no_person",
+        "runner_ups": [
+          {
+            "scene_id": "2106a207-5de5-4d86-870b-406d3f7e081a",
+            "score": 0.1582
+          },
+          {
+            "scene_id": "a677b948-c47f-4c25-981b-1a6f7d86ed46",
+            "score": 0.1497
+          }
+        ]
+      }
+    ]
+  }
+]

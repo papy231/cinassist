@@ -1,20 +1,20 @@
 """
 CinAssist — Cleanup automatique (Vague 2).
 
-Depuis les timestamps de parole (Whisper transkription_json), produit :
-    1. remove_silences : sous-segments de parole seulement (gaps > seuil coupés)
-    2. find_hesitations : marque les timestamps de "euh"/"um"/répétitions
+Erzeugt aus den Sprechzeiten der Whisper-Transkription (transkription_json):
+    1. remove_silences: nur die gesprochenen Abschnitte, Pausen über dem Schwellwert entfallen
+    2. find_hesitations: markiert die Zeitpunkte von "äh", "um" und Wiederholungen
 
-Ne modifie JAMAIS la DB. Retourne des "segments" prêts pour export
-(compatibles avec le format attendu par backend/core/otio_export.py).
+Verändert die Datenbank NIE. Zurück kommen ausgabefertige Segmente
+im Format, das backend/core/otio_export.py erwartet.
 
 Format segment :
     {
-        "clip_path": str,   # chemin absolu du .mp4
+        "clip_path": str,   # absoluter Pfad zur .mp4
         "clip_name": str,   # nom lisible
-        "media_start": float,  # offset dans le clip source (secondes)
-        "duration": float,     # durée du segment (secondes)
-        "src_scene_id": str,   # provenance (pour trace)
+        "media_start": float,  # Versatz im Ausgangsclip, in Sekunden
+        "duration": float,     # Dauer des Segments, in Sekunden
+        "src_scene_id": str,   # Herkunft, zur Nachvollziehbarkeit
     }
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Any
 
 logger = logging.getLogger("cinassist.cleanup")
 
-# Marqueurs d'hésitation (FR + DE + EN)
+# Merkmale des Zögerns, in drei Sprachen
 HESITATION_PATTERNS = [
     r"\b(euh+|heu+|hein|voilà|donc|bon|alors|en fait|je veux dire|tu vois)\b",
     r"\b(ähm+|äh+|halt|also|quasi|irgendwie|sozusagen)\b",
@@ -35,7 +35,7 @@ _HESIT_RE = re.compile("|".join(HESITATION_PATTERNS), re.IGNORECASE)
 
 
 def _scene_speech_segments(scene: dict) -> list[dict]:
-    """Extrait les segments Whisper d'une scène. Format {start, end, text}."""
+    """Liest die Whisper-Segmente einer Szene. Format {start, end, text}."""
     raw = scene.get("transkription_json")
     if not raw:
         return []
@@ -59,14 +59,14 @@ def remove_silences_from_scenes(
     keep_margin_ms: int = 150,
 ) -> dict:
     """
-    Découpe chaque scène en sous-segments correspondant aux moments de parole.
+    Zerlegt jede Szene in Abschnitte, die den gesprochenen Stellen entsprechen.
 
     Args:
-        scenes: liste de dicts scène avec au minimum
+        scenes: Liste von Szenen-Wörterbüchern mit mindestens
                 {id, start_zeit, end_zeit, transkription_json,
                  clip: {dateipfad, dateiname}}
-        min_silence_ms: durée minimale d'un silence pour être coupé (défaut 800ms).
-        keep_margin_ms: marge à conserver avant/après chaque segment parlé (défaut 150ms).
+        min_silence_ms: Mindestdauer einer Stille, damit geschnitten wird, voreingestellt 800 ms.
+        keep_margin_ms: Puffer vor und nach jedem gesprochenen Abschnitt, voreingestellt 150 ms.
 
     Returns:
         {
@@ -82,7 +82,7 @@ def remove_silences_from_scenes(
     margin = keep_margin_ms / 1000.0
 
     all_segments: list[dict] = []
-    all_silences: list[dict] = []  # intervalles retirés (pour visualisation timeline)
+    all_silences: list[dict] = []  # entfernte Bereiche, zur Anzeige in der Zeitleiste
     total_original = 0.0
     scenes_no_speech = 0
 
@@ -99,22 +99,22 @@ def remove_silences_from_scenes(
         scene_id = scene.get("id") or scene.get("scene_id") or ""
 
         if not speech or not clip_path:
-            # Pas de parole → soit on garde tel quel, soit on skip
-            # Politique par défaut : skip (dérushage strict)
+            # Ohne Sprache wird entweder unverändert behalten oder übersprungen
+            # Vorgabe: überspringen, also strenges Sichten
             scenes_no_speech += 1
             continue
 
-        # Fusionner segments proches (< min_gap entre eux)
+        # Nah beieinander liegende Segmente zusammenfassen, Abstand kleiner als min_gap
         merged: list[dict] = []
         for seg in speech:
-            # Timestamps Whisper = ABSOLUS dans le clip, pas relatifs à la scène
-            # Mais parfois relatifs — on suppose absolus (Whisper standard)
+            # Whisper-Zeiten sind ABSOLUT im Clip, nicht relativ zur Szene
+            # Bisweilen sind sie relativ; angenommen wird absolut, wie bei Whisper üblich
             if not merged or seg["start"] - merged[-1]["end"] > min_gap:
                 merged.append({"start": seg["start"], "end": seg["end"]})
             else:
                 merged[-1]["end"] = seg["end"]
 
-        # Ajouter marge autour de chaque merged span
+        # Puffer um jeden zusammengefassten Bereich legen
         kept_spans: list[dict] = []
         for m in merged:
             m_start = max(scene_start, m["start"] - margin)
@@ -131,10 +131,10 @@ def remove_silences_from_scenes(
                 "src_type": "speech",
             })
 
-        # Silences = complément des kept_spans dans [scene_start, scene_end].
-        # Utilisé côté frontend pour dessiner les fantômes deleteRange sur la
-        # timeline (visualisation HITL). NB : les kept_spans peuvent se recouvrir
-        # après application de la margin — on fusionne avant de calculer.
+        # Stille ist das Gegenstück zu den behaltenen Abschnitten in [scene_start, scene_end].
+        # Die Oberfläche zeichnet daraus die Vorschau der zu löschenden Bereiche auf der
+        # Zeitleiste zur Anzeige. Zu beachten: die kept_spans können sich überlappen
+        # nach Anwendung des Sicherheitsabstands; zusammengeführt wird vor der Berechnung.
         if kept_spans:
             kept_sorted = sorted(kept_spans, key=lambda x: x["start"])
             fused: list[dict] = [kept_sorted[0].copy()]
@@ -189,7 +189,7 @@ def find_hesitations_in_scenes(scenes: list[dict]) -> dict:
         prev_word_norm = None
         for seg in speech:
             text = seg["text"]
-            # Marqueurs
+            # Merkmale
             for m in _HESIT_RE.finditer(text):
                 dur = seg["end"] - seg["start"]
                 hits.append({
@@ -202,7 +202,7 @@ def find_hesitations_in_scenes(scenes: list[dict]) -> dict:
                     "context": text[:80],
                 })
                 total_hesitation_time += dur
-            # Répétitions immédiates (word_i == word_i+1)
+            # Unmittelbare Wortwiederholungen (word_i == word_i+1)
             words = [w.strip(".,!?;:\"'").lower() for w in text.split() if w.strip()]
             for j in range(1, len(words)):
                 if words[j] == words[j - 1] and len(words[j]) > 2:

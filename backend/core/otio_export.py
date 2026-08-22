@@ -1,12 +1,12 @@
 """
 CinAssist — Génération OpenTimelineIO (FCPXML, OTIO JSON, EDL si dispo).
 
-Prend une liste de segments {clip_id, clip_path, media_start, duration, ...}
-et produit un fichier .fcpxml/.otio importable dans Premiere Pro, Final Cut
+Nimmt eine Liste von Segmenten {clip_id, clip_path, media_start, duration, ...}
+und erzeugt eine .fcpxml- oder .otio-Datei, die sich in Premiere Pro, Final Cut
 Pro X, DaVinci Resolve, Autodesk Flame, etc.
 
-Cœur du chantier Vague 1.6 : c'est CETTE brique qui rend CinAssist
-adoptable par un vidéomonteur pro — il garde son NLE, importe le rough cut.
+Dieser Baustein macht CinAssist für Berufsschnitt brauchbar:
+die gewohnte Schnittsoftware bleibt, der Rohschnitt wird eingelesen.
 """
 from __future__ import annotations
 
@@ -20,7 +20,9 @@ from opentimelineio.opentime import RationalTime, TimeRange
 
 logger = logging.getLogger("cinassist.otio_export")
 
-EXPORT_DIR = Path.home() / "Documents" / "CinAssist_Exports"
+# ~/Movies statt ~/Documents: Documents ist iCloud-synchronisiert — bei vollem iCloud
+# werden Dateien evakuiert („Fehler“-Badge) und Resolve kann sie nicht lesen.
+EXPORT_DIR = Path.home() / "Movies" / "CinAssist_Exports"
 
 # Formats supportés → (extension, adapter_name)
 FORMATS: dict[str, tuple[str, str]] = {
@@ -36,18 +38,18 @@ def _build_timeline(
     fps: float = 30.0,
 ) -> otio.schema.Timeline:
     """
-    Construit une timeline OTIO depuis une liste de segments.
+    Baut aus einer Liste von Segmenten eine OTIO-Zeitleiste.
 
-    Chaque segment doit contenir :
-      - clip_path (str) : chemin absolu vers le fichier vidéo source
-      - clip_name (str) : nom lisible du clip
-      - media_start (float) : offset dans le source (secondes)
-      - duration (float) : durée du segment (secondes)
+    Jedes Segment muss enthalten:
+      - clip_path (str): absoluter Pfad zur Ausgangsdatei
+      - clip_name (str): lesbarer Name des Clips
+      - media_start (float): Versatz in der Quelle, in Sekunden
+      - duration (float): Dauer des Segments, in Sekunden
       - track (str, optionnel) : "v1", "v2"... défaut "v1"
     """
     timeline = otio.schema.Timeline(name=name)
 
-    # Group segments par track
+    # Segmente nach Spur gruppieren
     by_track: dict[str, list[dict]] = {}
     for seg in segments:
         tr = seg.get("track", "v1").lower()
@@ -65,7 +67,7 @@ def _build_timeline(
             duration_s = float(seg["duration"])
             media_start_s = float(seg.get("media_start", 0.0))
 
-            # ExternalReference pointant vers le fichier source
+            # ExternalReference verweist auf die Ausgangsdatei
             media_ref = otio.schema.ExternalReference(
                 target_url=f"file://{path}",
                 available_range=TimeRange(
@@ -103,7 +105,7 @@ def export_to_file(
             f"Unbekanntes Format: {format}. Verfügbar: {list(FORMATS.keys())}"
         )
     if not segments:
-        raise ValueError("Aucun segment fourni.")
+        raise ValueError("Kein Segment übergeben.")
 
     ext, adapter = FORMATS[format]
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)

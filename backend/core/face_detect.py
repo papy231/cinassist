@@ -1,20 +1,20 @@
 """
 CinAssist — Face Detection (Vague 1.3)
 
-Détection de visages via OpenCV Haar cascade + classification framing.
+Gesichtserkennung über die Haar-Kaskade von OpenCV, samt Einordnung der Einstellungsgröße.
 
-Pourquoi Haar plutôt que MediaPipe / YOLO :
-    - opencv-python déjà installé, pas de download modèle externe.
-    - Latence ~20-50ms par image sur M4 (largement suffisant pour thumbnails).
-    - Précision moyenne mais adéquate pour DÉRUSHAGE (on veut savoir s'il y
-      a UN visage, à peu près où et à peu près quelle taille — pas de la
+Warum Haar und nicht MediaPipe oder YOLO:
+    - opencv-python ist bereits vorhanden, ein externes Modell muss nicht geladen werden.
+    - Rechenzeit von etwa zwanzig bis fünfzig Millisekunden je Bild auf dem M4, für Vorschaubilder reichlich.
+    - Mittlere Genauigkeit, für die Sichtung des Materials aber ausreichend: gefragt ist,
+      ob ÜBERHAUPT ein Gesicht da ist, ungefähr wo und ungefähr wie groß, nicht
       reconnaissance).
-    - Migration future vers DNN OpenCV (Caffe SSD) trivial si besoin +
-      précision, sans changer l'interface.
+    - Ein späterer Wechsel auf das neuronale Netz von OpenCV (Caffe SSD) wäre unaufwendig,
+      falls mehr Genauigkeit nötig wird, ohne die Schnittstelle zu ändern.
 
-Retourne un dict {face_count, framing, faces[]} exploitable par l'agent :
+Zurück kommt ein Wörterbuch {face_count, framing, faces[]}, das der Assistent auswerten kann:
     - framing ∈ {"extreme_closeup", "closeup", "medium", "wide_with_person", "wide_no_person"}
-      Défini par le ratio bbox_area / frame_area du PLUS GROS visage.
+      Bestimmt über das Verhältnis bbox_area zu frame_area des GRÖSSTEN Gesichts.
     - faces = liste de {bbox: [x,y,w,h], area_ratio, center_x, center_y}
 """
 from __future__ import annotations
@@ -40,8 +40,44 @@ def _get_cascade() -> cv2.CascadeClassifier:
     return _cascade
 
 
+_profile_cascade: cv2.CascadeClassifier | None = None
+_profile_tried = False
+
+
+def _get_profile_cascade() -> cv2.CascadeClassifier | None:
+    global _profile_cascade, _profile_tried
+    if not _profile_tried:
+        _profile_tried = True
+        try:
+            c = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
+            _profile_cascade = None if c.empty() else c
+        except Exception:  # noqa: BLE001
+            _profile_cascade = None
+    return _profile_cascade
+
+
+def _iou(a, b) -> float:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _nms(boxes, schwelle: float = 0.3):
+    """Überlappende Treffer (frontal/profil/gespiegelt) auf einen Kasten zusammenziehen."""
+    boxes = sorted((tuple(int(v) for v in b) for b in boxes), key=lambda b: b[2] * b[3], reverse=True)
+    out = []
+    for b in boxes:
+        if all(_iou(b, o) < schwelle for o in out):
+            out.append(b)
+    return out
+
+
 def _classify_framing(max_area_ratio: float, face_count: int) -> str:
-    """Classification framing style filmique par ratio bbox/frame."""
+    """Ordnet die Einstellungsgröße filmisch ein, über das Verhältnis von Rahmen zu Bild."""
     if face_count == 0:
         return "wide_no_person"
     if max_area_ratio > 0.30:
@@ -55,10 +91,10 @@ def _classify_framing(max_area_ratio: float, face_count: int) -> str:
 
 def detect_faces(image_path: str | Path) -> dict:
     """
-    Analyse un frame et retourne face_count + framing + bounding boxes.
+    Wertet ein Einzelbild aus und gibt face_count, framing und die Rahmen zurück.
 
     Args:
-        image_path : chemin vers un fichier .jpg / .png
+        image_path: Pfad zu einer .jpg- oder .png-Datei
 
     Returns:
         {
@@ -74,16 +110,22 @@ def detect_faces(image_path: str | Path) -> dict:
     h, w = img.shape[:2]
     frame_area = float(h * w)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    # equalizeHist améliore la détection sur images sous-exposées
+    # equalizeHist verbessert die Erkennung auf unterbelichteten Bildern
     gray = cv2.equalizeHist(gray)
 
     cascade = _get_cascade()
-    detections = cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(30, 30),
-    )
+    # minSize relativ zur Bildbreite: bei 896-px-Frames sind Gesichter in Totalen ~20–30 px.
+    min_px = max(20, int(w * 0.025))
+    detections = list(cascade.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=5, minSize=(min_px, min_px)))
+    # Profil-Kaskade (links + gespiegelt rechts) — Haar-frontal findet in Dialog-Totalen oft nichts.
+    prof = _get_profile_cascade()
+    if prof is not None:
+        for (x, y, fw, fh) in prof.detectMultiScale(gray, scaleFactor=1.08, minNeighbors=6, minSize=(min_px, min_px)):
+            detections.append((x, y, fw, fh))
+        flipped = cv2.flip(gray, 1)
+        for (x, y, fw, fh) in prof.detectMultiScale(flipped, scaleFactor=1.08, minNeighbors=6, minSize=(min_px, min_px)):
+            detections.append((w - x - fw, y, fw, fh))
+    detections = _nms(detections)
 
     faces: list[dict] = []
     max_area_ratio = 0.0

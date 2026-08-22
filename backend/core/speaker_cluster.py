@@ -38,10 +38,10 @@ def _get_embedding_pipeline():
         from backend.core.config import TEMP_DIR
 
         savedir = str(TEMP_DIR / "speechbrain_ecapa")
-        # CPU par défaut : SpeechBrain a plusieurs sous-modules (features,
-        # normalizer, embedding) qui ne migrent pas ensemble sur MPS →
-        # crash "input/weight device mismatch". CPU est acceptable ici
-        # (~200ms par embedding sur M4, on est appelé rarement).
+        # Voreingestellt der Hauptprozessor: SpeechBrain besteht aus mehreren Teilen
+        # (Merkmale, Normierung, Einbettung), die nicht gemeinsam auf MPS wechseln,
+        # was zum Absturz "input/weight device mismatch" führt. Der Hauptprozessor genügt hier
+        # etwa 200 Millisekunden je Einbettung auf dem M4, und der Aufruf erfolgt selten.
         classifier = EncoderClassifier.from_hparams(
             source="speechbrain/spkrec-ecapa-voxceleb",
             savedir=savedir,
@@ -88,7 +88,7 @@ def _compute_embedding(audio_wav: Path):
     if waveform.shape[0] > 1:
         waveform = waveform.mean(dim=0, keepdim=True)
 
-    # Waveform sur CPU (voir _get_embedding_pipeline)
+    # Wellenform auf dem Hauptprozessor, siehe _get_embedding_pipeline
     waveform = waveform.cpu()
 
     with torch.no_grad():
@@ -162,7 +162,7 @@ def cluster_speakers(
     normed = matrix / (norms + 1e-9)
     sim = normed @ normed.T  # (N, N)
 
-    # Union-Find pour merger paire à paire au-dessus du seuil
+    # Union-Find, um paarweise oberhalb der Schwelle zusammenzuführen
     parent = list(range(len(sids)))
     def find(x):
         while parent[x] != x:
@@ -195,7 +195,7 @@ def cluster_speakers(
             lbl = info.get("label_manual") or info.get("label_auto", "?")
             labels.append(f"{lbl} ({clip_name})")
 
-        # avg similarity innerhalb du cluster
+        # mittlere Ähnlichkeit innerhalb der Gruppe
         if len(indices) > 1:
             pair_sims = []
             for i in range(len(indices)):
@@ -224,7 +224,7 @@ def cluster_speakers(
             "avg_similarity": avg,
         })
 
-    # Trie clusters : ceux avec plusieurs membres en premier
+    # Gruppen sortieren, jene mit mehreren Mitgliedern zuerst
     clusters.sort(key=lambda c: (-c["speaker_count"], c["cluster_id"]))
 
     return {

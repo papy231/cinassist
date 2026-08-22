@@ -28,6 +28,12 @@ type Szene = {
   transkription_json: unknown;
   hat_embedding: boolean;
   thumbnail_pfad: string | null;
+  framing?: string | null;
+  face_count?: number | null;
+  /** Personenzahl laut Bildmodell (Median über die Stichproben-Frames). */
+  personen?: number | null;
+  /** Stichproben-Frames (Anfang/Mitte/Ende) mit faktischer Beschreibung. */
+  stichproben?: Array<{ t: number; datei: string; beschreibung: string | null; personen: number | null; face_count: number }> | null;
 };
 
 type Analyse = {
@@ -59,8 +65,23 @@ type Synthese = {
   erwaehnte_personen?: string[];
   /** Legacy champ (avant scission) — merged côté frontend en anwesende. */
   personen?: string[];
+  /** Zitate/Verweise, die thema/narration stützen. */
+  belege?: string[];
+  /** Was das Modell NICHT belegen kann. */
+  unsicher?: string[];
+  /** Deterministische Nachprüfung (entfernte unbelegte Namen etc.). */
+  hinweise?: string[];
+  belege_zahl?: { dialog_segmente: number; bildbeschreibungen: number; sprecher: number };
   generated_at?: string;
   model?: string;
+};
+
+const FRAMING_LABEL: Record<string, string> = {
+  extreme_closeup: "Detail / Extreme Close-up",
+  closeup: "Nah / Close-up",
+  medium: "Halbnah / Medium",
+  wide_with_person: "Totale mit Person(en)",
+  wide_no_person: "Totale ohne Person",
 };
 
 const fmtSec = (s: number) => {
@@ -82,7 +103,7 @@ const thumbUrl = (absPath: string | null): string | null => {
   return `${API}/temp/${m[1]}`;
 };
 
-type WhisperSegment = { start: number; end: number; text: string; woerter?: unknown };
+type WhisperSegment = { start: number; end: number; text: string; woerter?: unknown; sprecher?: string };
 
 /**
  * Filet de sécurité : ré-applique le filtre anti-hallucination Whisper côté
@@ -116,6 +137,9 @@ const isHallucination = (text: string): boolean => {
   const words = clean.split(/\s+/);
   if (words.length >= 2 && new Set(words).size === 1) return true;
   if (words.length >= 4 && new Set(words).size <= 2) return true;
+  if (/(.)\1{7,}/.test(norm)) return true;                       // Zeichen-Stottern („ぜぜぜぜ“, „!!!!!!!!“)
+  const fremd = (norm.match(/[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u0400-\u04ff\u0600-\u06ff]/g) ?? []).length;
+  if (fremd >= 3 && fremd >= Math.floor(clean.length / 3)) return true; // fremdes Schriftsystem (Whisper-Kipp)
   return false;
 };
 
@@ -262,7 +286,7 @@ function OverviewTab({ analyse, pipeline }: { analyse: Analyse; pipeline: Pipeli
     { label: "Szenen erkannt", value: String(analyse.szenen_anzahl), sub: "scenedetect" },
     { label: "Transkribiert", value: `${totalTranscribed}/${analyse.szenen_anzahl}`, sub: "mlx-whisper" },
     { label: "CLIP-Embeddings", value: `${withEmbedding}/${analyse.szenen_anzahl}`, sub: "open_clip" },
-    { label: "Beschreibungen", value: `${withDescription}/${analyse.szenen_anzahl}`, sub: "moondream · llama3" },
+    { label: "Beschreibungen", value: `${withDescription}/${analyse.szenen_anzahl}`, sub: "llava · Stichproben" },
   ];
   return (
     <div>
@@ -328,9 +352,29 @@ function ScenesTab({ szenen }: { szenen: Szene[] }) {
                 <span style={{ fontSize: 10, color: "#888", fontFamily: "ui-monospace, monospace" }}>{fmtSec(s.start)} → {fmtSec(s.end)} · {s.dauer.toFixed(2)}s</span>
                 {s.hat_embedding && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 8, background: "rgba(120,180,255,0.15)", color: "#9ac2ff" }}>CLIP</span>}
               </div>
-              {s.beschreibung && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+                {s.framing && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 8, background: "rgba(255,255,255,0.06)", color: "#bdbdbd" }}>{FRAMING_LABEL[s.framing] ?? s.framing}</span>}
+                {typeof s.personen === "number" && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 8, background: "rgba(150,217,150,0.12)", color: "#96d996" }} title="Bildmodell-Zählung (Median der Stichproben)">{s.personen} Person{s.personen === 1 ? "" : "en"}</span>}
+                {(s.face_count ?? 0) > 0 && <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 8, background: "rgba(255,255,255,0.06)", color: "#bdbdbd" }} title="Haar-Gesichtserkennung">{s.face_count} Gesicht{s.face_count === 1 ? "" : "er"}</span>}
+              </div>
+              {s.stichproben && s.stichproben.length > 1 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 4 }}>
+                  {s.stichproben.map((p, i) => {
+                    const u = thumbUrl(p.datei);
+                    return (
+                      <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                        {u ? <img src={u} alt="" style={{ width: 56, height: 32, objectFit: "cover", borderRadius: 3, background: "#000", flexShrink: 0 }} /> : <div style={{ width: 56, height: 32 }} />}
+                        <div style={{ fontSize: 11, color: "#d0d0d0", lineHeight: 1.35 }}>
+                          <span style={{ color: "#8a8a8a", fontFamily: "ui-monospace, monospace", marginRight: 6 }}>{fmtSec(p.t)}</span>
+                          {p.beschreibung ?? <span style={{ color: "#666" }}>keine Beschreibung</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : s.beschreibung ? (
                 <div style={{ fontSize: 12, color: "#d0d0d0", lineHeight: 1.4, marginBottom: 4 }}>{s.beschreibung}</div>
-              )}
+              ) : null}
               {txt ? (
                 <div style={{ fontSize: 11, color: "#8a8a8a", fontStyle: "italic", lineHeight: 1.35, borderLeft: "2px solid rgba(229,193,0,0.35)", paddingLeft: 8, marginTop: 4 }}>
                   „{txt.length > 220 ? txt.slice(0, 220) + "…" : txt}"
@@ -345,6 +389,9 @@ function ScenesTab({ szenen }: { szenen: Szene[] }) {
     </div>
   );
 }
+
+const SPRECHER_FARBEN: Record<string, string> = { SPEAKER_00: "#96d996", SPEAKER_01: "#9ac2ff", SPEAKER_02: "#e5c100", SPEAKER_03: "#f0a0a0" };
+const sprecherLabel = (s: string) => { const m = s.match(/(\d+)$/); return m ? `Sprecher ${String.fromCharCode(65 + Number(m[1]))}` : s; };
 
 function TranscriptTab({ szenen }: { szenen: Szene[] }) {
   // Aplati toutes les scènes en une seule liste de segments Whisper.
@@ -381,7 +428,10 @@ function TranscriptTab({ szenen }: { szenen: Szene[] }) {
             <span style={{ color: "#4a4a4a" }}> · </span>
             <span style={{ color: "#555" }}>S{seg.szenen_nr}</span>
           </span>
-          <span style={{ fontSize: 13, color: "#e0e0e0", lineHeight: 1.5 }}>{seg.text.trim()}</span>
+          <span style={{ fontSize: 13, color: "#e0e0e0", lineHeight: 1.5 }}>
+            {seg.sprecher && <span style={{ color: SPRECHER_FARBEN[seg.sprecher] ?? "#9ac2ff", fontSize: 11, fontWeight: 600, marginRight: 6 }} title="Diarization (pyannote)">{sprecherLabel(seg.sprecher)}</span>}
+            {seg.text.trim()}
+          </span>
         </div>
       ))}
     </div>
@@ -421,7 +471,6 @@ function BerichtTab({ clipId, pipeline }: { clipId: string; pipeline: Pipeline |
             <div style={{ fontSize: 10, color: "#666" }}>
               {cached ? "Cached · " : "Frisch generiert · "}
               Model : <code style={{ color: "#8a8a8a" }}>{synthese.model ?? "?"}</code>
-              {synthese.generated_at && ` · ${new Date(synthese.generated_at).toLocaleString()}`}
             </div>
             <button
               onClick={() => fetchSynthese(true)}
@@ -460,6 +509,29 @@ function BerichtTab({ clipId, pipeline }: { clipId: string; pipeline: Pipeline |
               </div>
             );
           })()}
+
+          {(synthese.belege?.length ?? 0) > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: "#7a7a7a", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Belege</div>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#cfcfcf", lineHeight: 1.5 }}>
+                {synthese.belege!.map((b, i) => <li key={i}>{b}</li>)}
+              </ul>
+            </div>
+          )}
+          {((synthese.unsicher?.length ?? 0) > 0 || (synthese.hinweise?.length ?? 0) > 0) && (
+            <div style={{ background: "rgba(229,193,0,0.06)", border: "1px solid rgba(229,193,0,0.2)", borderRadius: 8, padding: "10px 12px" }}>
+              <div style={{ fontSize: 10, color: "#e5c100", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>Nicht belegt / Nachprüfung</div>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 11, color: "#cfcfcf", lineHeight: 1.5 }}>
+                {(synthese.unsicher ?? []).map((u, i) => <li key={`u${i}`}>{u}</li>)}
+                {(synthese.hinweise ?? []).map((h, i) => <li key={`h${i}`} style={{ color: "#e5c100" }}>{h}</li>)}
+              </ul>
+              {synthese.belege_zahl && (
+                <div style={{ fontSize: 10, color: "#7a7a7a", marginTop: 6 }}>
+                  Grundlage: {synthese.belege_zahl.dialog_segmente} Dialog-Segmente · {synthese.belege_zahl.bildbeschreibungen} Bildbeschreibungen · {synthese.belege_zahl.sprecher} Sprecher
+                </div>
+              )}
+            </div>
+          )}
 
           {showPipelineDetails && (
             <details style={{ marginTop: 4, background: "#141415", borderRadius: 8, padding: "8px 12px", border: "1px solid rgba(255,255,255,0.04)" }}>

@@ -1,15 +1,15 @@
 """Ingestion synchrone de fichiers vidéo locaux (bypass Celery/Redis).
 
-Réplique ce que fait l'endpoint POST /api/clips/upload (copie dans uploads/,
-création Clip + Job) puis exécute le pipeline d'ingestion en mode EAGER
-(`ingestion_pipeline.apply`) — utile quand le broker Redis n'est pas joignable
-en local (tunnel SSH qui masque le port) ou pour peupler un pool de test/benchmark.
+Bildet nach, was der Endpunkt POST /api/clips/upload tut, also das Kopieren nach uploads/
+und das Anlegen von Clip und Auftrag, und führt die Aufnahmestrecke unmittelbar aus
+(`ingestion_pipeline.apply`). Nützlich, wenn Redis örtlich nicht erreichbar ist,
+etwa hinter einem SSH-Tunnel, oder um einen Prüfbestand zu füllen.
 
-Idempotent : saute les fichiers dont le dateiname est déjà "analysiert".
+Mehrfach ausführbar: Dateien, deren dateiname bereits "analysiert" ist, werden übersprungen.
 
 Usage:
     backend/.venv/bin/python -m backend.tools.ingest_local test_rushes/*.mp4
-    backend/.venv/bin/python -m backend.tools.ingest_local --quelle B fichier.mov
+    backend/.venv/bin/python -m backend.tools.ingest_local --quelle B datei.mov
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ def ingest_file(pfad: Path, quelle: str) -> dict:
     finally:
         db.close()
 
-    # Pipeline synchrone (eager) — gère bind=True correctement, pas de broker requis.
+    # Strecke im gleichen Ablauf; bind=True wird richtig behandelt, ein Vermittler ist nicht nötig.
     result = ingestion_pipeline.apply(args=(clip_id, job_id))
     ok = result.successful()
     return {

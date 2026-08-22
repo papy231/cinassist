@@ -138,7 +138,7 @@ class TimelineGenerateRequest(BaseModel):
     num_slots_hint: int | None = None
     top_k: int = 5
     dedupe_across_slots: bool = True
-    use_query_rewrite: bool = False        # llama3 enrichit les intents avant CLIP
+    use_query_rewrite: bool = False        # llama3 reichert die Absichten vor CLIP an
     assemble_mode: str = "heuristic"       # "heuristic" | "llm"
     save_timeline: bool = True             # persist als Timeline-Zeile
     timeline_name: str | None = None
@@ -166,11 +166,11 @@ async def timeline_aus_prompt_generieren(
     if not pool_ids:
         raise HTTPException(400, "Keine analysierten Clips im Pool gefunden.")
 
-    # Phase 0 : Résumé du pool → planner "pool-aware"
+    # Phase 0: Zusammenfassung des Bestands für die bestandsbewusste Planung
     pool_summary = await summarize_pool(db, pool_ids)
     _log_stage("00_pool_summary", pool_summary, run_id)
 
-    # Phase 1 : Plan (informé par le pool_summary)
+    # Phase 1: Zerlegung der Anfrage, gestützt auf die Bestandszusammenfassung
     plan = await plan_timeline(body.prompt, body.duration_s, body.num_slots_hint,
                                pool_summary=pool_summary)
     _log_stage("01_plan", plan, run_id)
@@ -184,7 +184,7 @@ async def timeline_aus_prompt_generieren(
     )
     _log_stage("02_candidates", candidates, run_id)
 
-    # Phase 3 : Assemble (avec post-fill vers la durée cible)
+    # Phase 3: Zusammenstellung mit Nachfüllen bis zur Zieldauer
     timeline_data = await assemble_timeline(plan, candidates, mode=body.assemble_mode,
                                             target_duration_s=body.duration_s)
     _log_stage("03_timeline", timeline_data, run_id)

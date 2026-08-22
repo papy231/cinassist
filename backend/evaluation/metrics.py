@@ -1,10 +1,10 @@
-"""Métriques quantitatives pour l'évaluation du générateur timeline-from-prompt.
+"""Quantitative Maße für die Auswertung der Timeline-Erzeugung.
 
-Toutes les métriques sont des fonctions pures qui prennent en entrée les
-outputs des Phases (plan, candidates, timeline) + le pool_summary et
-retournent un dict de scores. Aucun I/O.
+Alle Maße sind reine Funktionen: Sie nehmen die Ergebnisse der Phasen
+(plan, candidates, timeline) sowie pool_summary entgegen und geben ein
+Wörterbuch mit Werten zurück. Kein Datei- oder Netzzugriff.
 
-Utilisées par backend/evaluation/run_benchmark.py.
+Verwendet von backend/evaluation/run_benchmark.py.
 """
 
 from __future__ import annotations
@@ -16,15 +16,15 @@ from typing import Any
 import numpy as np
 
 
-# ─── Coverage sémantique (CLIP text-text) ────────────────────────────────────
+# ─── Semantische Abdeckung (CLIP Text gegen Text) ────────────────────────────
 
 def coverage_score(plan: dict, candidates: dict, timeline: dict,
                    embed_fn) -> dict[str, float]:
-    """Similarité CLIP text-text moyenne entre l'intent EN du slot et la
-    beschreibung (moondream) de la scène choisie. Plus haut = meilleure
-    correspondance sémantique.
+    """Mittlere CLIP-Ähnlichkeit zwischen der Absichtsformulierung des Slots
+    und der erzeugten Beschreibung der gewählten Szene. Höher bedeutet
+    bessere inhaltliche Übereinstimmung.
 
-    Retourne aussi la couverture par slot pour l'analyse détaillée.
+    Gibt zusätzlich den Wert je Slot für die genauere Auswertung zurück.
     """
     slots_by_id = {str(s.get("slot_id")): s for s in (plan.get("slots") or [])}
     picked = [d for d in (timeline.get("decisions") or [])
@@ -64,12 +64,12 @@ def coverage_score(plan: dict, candidates: dict, timeline: dict,
     }
 
 
-# ─── Respect des contraintes (framing / speaker / dialogue) ──────────────────
+# ─── Bedingungstreue (Einstellungsgröße, Sprecher, Dialog) ───────────────────
 
 def constraint_precision(plan: dict, candidates: dict, timeline: dict,
                           speaker_map: dict[str, float]) -> dict[str, Any]:
-    """Ratio de slots où les contraintes du plan sont respectées par la scène
-    picked. framing_hint="any" est considéré comme toujours respecté.
+    """Anteil der Slots, bei denen die gewählte Szene die Bedingungen des Plans
+    erfüllt. framing_hint="any" gilt immer als erfüllt.
     """
     slots_by_id = {str(s.get("slot_id")): s for s in (plan.get("slots") or [])}
     scene_meta: dict[str, dict] = {}
@@ -116,7 +116,7 @@ def constraint_precision(plan: dict, candidates: dict, timeline: dict,
     }
 
 
-# ─── Timing / durée / structure ──────────────────────────────────────────────
+# ─── Laufzeit, Dauer, Struktur ───────────────────────────────────────────────
 
 def duration_metrics(plan: dict, timeline: dict, target_duration_s: float) -> dict[str, float]:
     total = float(timeline.get("_meta", {}).get("total_duration_s") or 0.0)
@@ -162,7 +162,7 @@ def diversity_metrics(timeline: dict) -> dict[str, float]:
 
 
 def score_metrics(candidates: dict, timeline: dict) -> dict[str, float]:
-    """Score combined moyen des top-1 choisis + gap top1/top2 par slot."""
+    """Mittlerer Rangwert der gewählten Kandidaten und Abstand zum Zweitbesten je Slot."""
     picked = [d for d in (timeline.get("decisions") or [])
               if d.get("outcome") == "picked"]
     top1_scores = [float(d.get("score") or d.get("clip_score") or 0.0)
@@ -216,8 +216,8 @@ def compute_all(plan: dict, candidates: dict, timeline: dict,
                 target_duration_s: float, pool_summary: dict,
                 pool_summary_wall_s: float, benchmark_wall_s: float,
                 embed_fn, speaker_map: dict[str, float]) -> dict[str, Any]:
-    """Calcule toutes les métriques et retourne un dict à plat exploitable
-    par pandas / CSV."""
+    """Berechnet alle Maße und gibt sie als flaches Wörterbuch zurück,
+    verwendbar für pandas und CSV."""
     out: dict[str, Any] = {}
     out.update(duration_metrics(plan, timeline, target_duration_s))
     out.update(diversity_metrics(timeline))
@@ -232,8 +232,8 @@ def compute_all(plan: dict, candidates: dict, timeline: dict,
 
 
 def flatten_for_csv(metrics: dict) -> dict[str, Any]:
-    """Prend un dict de métriques mixte (avec sub-lists/dicts) et retourne un
-    dict flat compatible CSV. Ignore les champs déjà compliqués."""
+    """Nimmt ein gemischtes Maß-Wörterbuch (mit Unterlisten und Unterwörterbüchern) und gibt ein
+    flaches Wörterbuch im CSV-Format. Verschachtelte Felder bleiben außen vor."""
     out: dict[str, Any] = {}
     skip_keys = {"coverage_per_slot", "framing_distribution",
                  "trim_strategy_distribution"}

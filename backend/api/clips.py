@@ -20,13 +20,24 @@ from sqlalchemy.orm import selectinload
 
 from backend.core.config import UPLOAD_DIR, PROXY_DIR, SCENE_THRESHOLD
 from backend.core.database import get_db, Clip, Szene, Job
+from backend.core.medien import clip_stem, clip_video_url, ist_upload_datei, medientyp, medienart, proxy_dateiname, AUDIO_ENDUNGEN_UPLOAD
 from backend.workers.ingest import ingestion_pipeline
 
 router = APIRouter(prefix="/api/clips", tags=["Clips"])
 
 # Erlaubte Dateiformate
-ERLAUBTE_ENDUNGEN = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+ERLAUBTE_ENDUNGEN = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mxf"} | AUDIO_ENDUNGEN_UPLOAD
 MAX_DATEIGROESSE = 5 * 1024 * 1024 * 1024  # 5 GB
+
+
+def _proxy_url(name: str) -> str:
+    """/proxies/<name>?v=<mtime> — Cache-Buster: Proxies/Waveforms werden bei Bedarf neu gebaut (stummer Proxy, zu kurz),
+    der Browser hält sie aber bis zu 1 h (Cache-Control). Die Versionsnummer = Änderungszeit der Datei."""
+    try:
+        v = int((PROXY_DIR / name).stat().st_mtime)
+    except OSError:
+        v = 0
+    return f"/proxies/{name}?v={v}"
 
 
 def _nonempty(p: Path) -> bool:
@@ -49,6 +60,7 @@ async def clip_hochladen(
     datei: UploadFile = File(...),
     quelle: str = Form(..., description="'A' oder 'B'"),
     ueberschreiben: bool = Form(False, description="Vorhandenen Clip gleichen Namens ersetzen"),
+    ordner_id: str | None = Form(None, description="Medien-Ordner (Bin), in den der Clip einsortiert wird"),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -95,7 +107,7 @@ async def clip_hochladen(
         for alt in vorhandene:
             try:
                 alt_pfad = Path(alt.dateipfad)
-                if alt_pfad.exists():
+                if alt_pfad.exists() and not alt.take_id and ist_upload_datei(alt.dateipfad):
                     alt_pfad.unlink()
                 alt_thumbs = Path(f"temp/thumbs_{alt.id}")
                 if alt_thumbs.exists():
@@ -120,6 +132,16 @@ async def clip_hochladen(
 
     dateigroesse = ziel_pfad.stat().st_size
 
+    # Metadaten sofort per ffprobe (< 1 s) — sonst steht der Clip mit „0 s“ im Medien-Panel und lässt
+    # sich nicht auf die Timeline ziehen, bis der (ggf. lange belegte) Worker den Metadaten-Schritt macht.
+    meta: dict = {}
+    try:
+        import asyncio
+        from backend.workers.ingest import _get_video_info
+        meta = await asyncio.to_thread(_get_video_info, str(ziel_pfad))
+    except Exception:
+        meta = {}
+
     # Clip in DB anlegen
     clip = Clip(
         id=clip_id,
@@ -128,7 +150,16 @@ async def clip_hochladen(
         quelle=quelle,
         dateigroesse=dateigroesse,
         status="hochgeladen",
+        dauer=meta.get("dauer") or None,
+        aufloesung=meta.get("aufloesung") or None,
+        bildrate=meta.get("bildrate") or None,
+        codec=meta.get("codec") or None,
     )
+    if ordner_id:
+        try:
+            clip.ordner_id = uuid.UUID(ordner_id)
+        except ValueError:
+            pass
     db.add(clip)
 
     # Job anlegen
@@ -166,10 +197,28 @@ async def clip_hochladen(
 @router.get("")
 async def clips_auflisten(db: AsyncSession = Depends(get_db)):
     """Alle hochgeladenen Clips auflisten."""
+    from backend.core.database import Take, TakeAudioLink
     result = await db.execute(
         select(Clip).order_by(Clip.erstellt_am.desc())
+        .options(selectinload(Clip.take).selectinload(Take.audio_links).selectinload(TakeAudioLink.audio_asset),
+                 selectinload(Clip.take).selectinload(Take.video_asset))
     )
     clips = result.scalars().all()
+
+    def _sync_info(clip):
+        t = clip.take
+        if not t:
+            return None
+        links = [lk for lk in t.audio_links if lk.methode != "verwaist" and lk.audio_asset]
+        links.sort(key=lambda lk: (not bool(lk.bestaetigt), -(lk.konfidenz or 0.0)))
+        return {
+            "take_id": str(t.id), "status": t.status, "multicam_gruppe": t.multicam_gruppe,
+            "szene": t.szene, "plan": t.plan, "prise": t.prise,
+            "tc_start": t.video_asset.tc_start if t.video_asset else None,
+            "tc_start_s": t.video_asset.tc_start_s if t.video_asset else None,
+            "ton": {"dateiname": links[0].audio_asset.dateiname, "offset_s": links[0].offset_s,
+                    "methode": links[0].methode, "konfidenz": links[0].konfidenz} if links else None,
+        }
 
     return [
         {
@@ -182,26 +231,45 @@ async def clips_auflisten(db: AsyncSession = Depends(get_db)):
             "dateigroesse_mb": round(clip.dateigroesse / (1024 * 1024), 1) if clip.dateigroesse else None,
             "status": clip.status,
             "erstellt_am": clip.erstellt_am.isoformat() if clip.erstellt_am else None,
-            "video_url": f"/uploads/{Path(clip.dateipfad).name}" if clip.dateipfad else None,
+            "video_url": clip_video_url(clip),
+            "medientyp": medientyp(clip.dateipfad),
+            "medienart": medienart(clip),        # video | audio | av (Etikett aus der Ingestion)
+            "hat_bild": clip.hat_bild,
+            "hat_ton": clip.hat_ton,
             "proxy_url": (
-                f"/proxies/{Path(clip.dateipfad).stem}_proxy.mp4"
-                if clip.dateipfad and _nonempty(PROXY_DIR / f"{Path(clip.dateipfad).stem}_proxy.mp4")
+                _proxy_url(proxy_dateiname(clip))
+                if clip.dateipfad and _nonempty(PROXY_DIR / proxy_dateiname(clip))
                 else None
             ),
             "waveform_url": (
-                f"/proxies/{Path(clip.dateipfad).stem}_wf.png"
-                if clip.dateipfad and (PROXY_DIR / f"{Path(clip.dateipfad).stem}_wf.png").exists()
+                _proxy_url(f"{clip_stem(clip)}_wf.png")
+                if clip.dateipfad and (PROXY_DIR / f"{clip_stem(clip)}_wf.png").exists()
                 else None
             ),
             "strip_url": (
-                f"/proxies/{Path(clip.dateipfad).stem}_strip.jpg"
-                if clip.dateipfad and (PROXY_DIR / f"{Path(clip.dateipfad).stem}_strip.jpg").exists()
+                _proxy_url(f"{clip_stem(clip)}_strip.jpg")
+                if clip.dateipfad and (PROXY_DIR / f"{clip_stem(clip)}_strip.jpg").exists()
                 else None
             ),
             "dateipfad": clip.dateipfad,
+            "ordner_id": str(clip.ordner_id) if clip.ordner_id else None,
+            "take_id": str(clip.take_id) if clip.take_id else None,
+            "sync": _sync_info(clip),
         }
         for clip in clips
     ]
+
+
+def _clip_medien_felder(clip: Clip) -> dict:
+    """Die Medien-Felder eines Clips (URLs/Etikett), wie sie die Liste liefert — für andere Router (Schnittplan)."""
+    return {
+        "id": str(clip.id), "dateiname": clip.dateiname, "dauer": clip.dauer, "status": clip.status,
+        "video_url": clip_video_url(clip), "medientyp": medientyp(clip.dateipfad), "medienart": medienart(clip),
+        "hat_bild": clip.hat_bild, "hat_ton": clip.hat_ton,
+        "proxy_url": (_proxy_url(proxy_dateiname(clip)) if clip.dateipfad and _nonempty(PROXY_DIR / proxy_dateiname(clip)) else None),
+        "waveform_url": (_proxy_url(f"{clip_stem(clip)}_wf.png") if clip.dateipfad and (PROXY_DIR / f"{clip_stem(clip)}_wf.png").exists() else None),
+        "strip_url": (_proxy_url(f"{clip_stem(clip)}_strip.jpg") if clip.dateipfad and (PROXY_DIR / f"{clip_stem(clip)}_strip.jpg").exists() else None),
+    }
 
 
 # ─── Clip-Details ────────────────────────────────────────
@@ -229,7 +297,9 @@ async def clip_details(clip_id: str, db: AsyncSession = Depends(get_db)):
         "dateigroesse_mb": round(clip.dateigroesse / (1024 * 1024), 1) if clip.dateigroesse else None,
         "status": clip.status,
         "erstellt_am": clip.erstellt_am.isoformat() if clip.erstellt_am else None,
-        "video_url": f"/uploads/{Path(clip.dateipfad).name}" if clip.dateipfad else None,
+        "video_url": clip_video_url(clip),
+        "medientyp": medientyp(clip.dateipfad),
+        "medienart": medienart(clip),
     }
 
 
@@ -282,6 +352,10 @@ async def clip_analyse(clip_id: str, db: AsyncSession = Depends(get_db)):
                 "transkription_json": s.transkription_json,
                 "hat_embedding": s.clip_embedding is not None and any(v != 0.0 for v in s.clip_embedding),
                 "thumbnail_pfad": s.thumbnail_pfad,
+                "framing": s.framing,
+                "face_count": s.face_count,
+                "personen": (s.analyse_visuelle or {}).get("personen") if isinstance(s.analyse_visuelle, dict) else None,
+                "stichproben": (s.analyse_visuelle or {}).get("stichproben") if isinstance(s.analyse_visuelle, dict) else None,
             }
             for s in szenen
         ],
@@ -338,7 +412,7 @@ async def clip_pipeline_bericht(clip_id: str, db: AsyncSession = Depends(get_db)
 
     # 2. Proxy — Dateigröße aus dem Dateisystem ablesen
     if clip.dateipfad:
-        proxy_pfad = PROXY_DIR / f"{Path(clip.dateipfad).stem}_proxy.mp4"
+        proxy_pfad = PROXY_DIR / proxy_dateiname(clip)
         if proxy_pfad.exists():
             history["proxy"] = {
                 "size_mb": round(proxy_pfad.stat().st_size / (1024 * 1024), 2),
@@ -350,11 +424,40 @@ async def clip_pipeline_bericht(clip_id: str, db: AsyncSession = Depends(get_db)
     # 3. Audio — die WAV-Datei wird nach Transkription gelöscht;
     #    wir wissen aber, dass sie existierte, wenn es Transkriptionen gibt
     hat_transkription = any(s.transkription for s in szenen)
+    # 2b. Sync — verknüpfter Ton aus dem Take-Modell (Clip per Referenz)
+    ton_quelle = "Kamera-Ton"
+    if clip.take_id:
+        from backend.core.database import Take, TakeAudioLink
+        take = (await db.execute(
+            select(Take).where(Take.id == clip.take_id)
+            .options(selectinload(Take.audio_links).selectinload(TakeAudioLink.audio_asset),
+                     selectinload(Take.video_asset))
+        )).scalar_one_or_none()
+        if take:
+            links = [lk for lk in take.audio_links if lk.methode != "verwaist" and lk.audio_asset]
+            links.sort(key=lambda lk: (not bool(lk.bestaetigt), -(lk.konfidenz or 0.0)))
+            history["sync"] = {
+                "take_id": str(take.id), "take_status": take.status,
+                "video": take.video_asset.dateiname if take.video_asset else None,
+                "video_tc": take.video_asset.tc_start if take.video_asset else None,
+                "video_tc_quelle": take.video_asset.tc_quelle if take.video_asset else None,
+                "audio": links[0].audio_asset.dateiname if links else None,
+                "audio_tc": links[0].audio_asset.tc_start if links else None,
+                "kanal": links[0].kanal_fuer_transkription if links else None,
+                "offset_s": links[0].offset_s if links else None,
+                "methode": links[0].methode if links else None,
+                "konfidenz": links[0].konfidenz if links else None,
+                "begruendung": links[0].begruendung if links else None,
+                "warnung": None if links else "Kein verknüpfter Ton — Transkription auf Kamera-Ton",
+            }
+            if links and take.status not in ("unklar", "manuell_abgelehnt"):
+                ton_quelle = f"verknüpftes WAV ({links[0].audio_asset.dateiname}, Kanal {links[0].kanal_fuer_transkription}, Offset {links[0].offset_s:+.3f} s)"
     if hat_transkription or szenen:
         history["audio"] = {
             "format": "WAV PCM 16-bit (temporär, nach Transkription gelöscht)",
             "sample_rate": 16000,
             "channels": 1,
+            "quelle": ton_quelle,
         }
 
     # 4. Transkription — alle Szenen-Segmente aggregieren
@@ -503,11 +606,11 @@ async def clip_synthese(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Génère (ou récupère depuis cache) une synthèse contextuelle du clip :
+    Erzeugt eine inhaltliche Zusammenfassung des Clips oder holt sie aus dem Zwischenspeicher:
     thème, narratif, style visuel, ambiance, genre, personnes présentes.
 
-    Passe `?refresh=true` pour forcer une régénération.
-    Sortie stockée dans `clips.synthese_json`.
+    Mit `?refresh=true` wird eine Neuberechnung erzwungen.
+    Das Ergebnis wird in `clips.synthese_json` abgelegt.
     """
     import datetime as _dt
     import httpx
@@ -526,21 +629,34 @@ async def clip_synthese(
     if clip.synthese_json and not refresh:
         return {"clip_id": str(clip.id), "cached": True, "synthese": clip.synthese_json}
 
-    # Speakers réellement diarisés pour ce clip (source de vérité pour les personnes présentes).
+    # Tatsächlich getrennte Sprecher dieses Clips; maßgeblich für die anwesenden Personen.
     speakers_result = await db.execute(select(Speaker).where(Speaker.clip_id == clip_id))
     speakers = list(speakers_result.scalars().all())
     speaker_labels = [sp.label_manual or sp.label_auto for sp in speakers]
 
     szenen = sorted(clip.szenen, key=lambda s: s.szenen_nr)
+    # SPEAKER_00 → „Sprecher A“ (bzw. manuell vergebener Name), damit das Modell Turns unterscheiden kann.
+    sprecher_namen: dict[str, str] = {}
+    for i, sp in enumerate(sorted(speakers, key=lambda x: x.label_auto)):
+        sprecher_namen[sp.label_auto] = sp.label_manual or f"Sprecher {chr(65 + i)}"
 
-    # Récupère toutes les phrases (dédoublonnées) + les descriptions par scène
+    # ── Belege sammeln (nur was wirklich in den Daten steht) ──
     transkript_lines: list[str] = []
     seg_seen: set[tuple[float, float]] = set()
     beschreibungen: list[str] = []
     framings: list[str] = []
+    personen_max = 0
     for s in szenen:
-        if s.beschreibung:
-            beschreibungen.append(f"[{s.start_zeit:.1f}s] {s.beschreibung}")
+        av = s.analyse_visuelle if isinstance(s.analyse_visuelle, dict) else {}
+        proben = av.get("stichproben") or []
+        if proben:
+            for pr in proben:
+                if pr.get("beschreibung"):
+                    beschreibungen.append(f"[{float(pr.get('t', s.start_zeit)):.0f}s] {pr['beschreibung']}")
+        elif s.beschreibung:
+            beschreibungen.append(f"[{s.start_zeit:.0f}s] {s.beschreibung}")
+        if isinstance(av.get("personen"), int):
+            personen_max = max(personen_max, av["personen"])
         if s.framing:
             framings.append(s.framing)
         raw = s.transkription_json or []
@@ -554,83 +670,102 @@ async def clip_synthese(
                 seg_seen.add(key)
                 text = str(seg.get("text", "")).strip()
                 if text:
-                    transkript_lines.append(f"[{seg.get('start', 0):.1f}s] {text}")
+                    sp = seg.get("sprecher")
+                    sp_txt = f" {sprecher_namen.get(sp, sp)}:" if sp else ""
+                    transkript_lines.append(f"[{seg.get('start', 0):.0f}s]{sp_txt} {text}")
 
-    # Cap la taille pour rester dans le prompt LLM
-    transkript_text = "\n".join(transkript_lines)[:6000]
-    beschreibungen_text = "\n".join(beschreibungen)[:2500]
+    transkript_text = "\n".join(transkript_lines)[:7000]
+    beschreibungen_text = "\n".join(beschreibungen)[:3000]
     framing_summary = ", ".join(f"{k}: {v}" for k, v in Counter(framings).most_common())
 
+    # Sync-/Take-Fakten (Szene/Einstellung/Take, verknüpfter Ton) — harte Metadaten, keine Deutung.
+    take_zeile = ""
+    if clip.take_id:
+        from backend.core.database import Take as _Take
+        tk = (await db.execute(select(_Take).where(_Take.id == clip.take_id))).scalar_one_or_none()
+        if tk:
+            teile = []
+            if tk.szene is not None: teile.append(f"Szene {tk.szene}")
+            if tk.plan is not None: teile.append(f"Einstellung {tk.plan}")
+            if tk.prise is not None: teile.append(f"Take {tk.prise}")
+            take_zeile = " · ".join(teile)
+    ton_zeile = ("verknüpfter Ton (Sync)" if clip.hat_ton and clip.take_id else
+                 "Kameraton" if clip.hat_ton else "kein Nutzton")
+
+    from backend.core import einstellungen as E
+    projekt_kontext = E.projekt_kontext()
+    glossar = [g for g in (E.transkription().get("glossar") or []) if g]
+
     speaker_block = (
-        f"{len(speakers)} identifiziert : {', '.join(speaker_labels)}"
-        if speakers else
-        "Keine Sprecher-Diarization verfügbar"
+        f"{len(speakers)} unterschiedliche Stimmen (Diarization): " + ", ".join(
+            f"{sprecher_namen.get(sp.label_auto, sp.label_auto)} ({sp.total_speaking_time:.0f}s Sprechzeit)" for sp in speakers)
+        + " — die Transkriptzeilen sind mit diesen Sprechern markiert; derselbe Sprecher kann eine Figur mit Kosename UND Namen anreden."
+        if speakers else "keine Diarization verfügbar"
     )
+    personen_block = f"max. {personen_max} Person(en) sichtbar (Bildmodell-Zählung)" if personen_max else "keine Personen sichtbar / nicht gezählt"
 
-    prompt = f"""Du bist ein FAKTUELLER Video-Analyst. Analysiere NUR was in den bereitgestellten Daten explicit vorkommt.
+    hat_dialog = bool(transkript_text.strip())
+    hat_bild = bool(beschreibungen_text.strip())
 
-🇩🇪 SPRACHREGEL — ABSOLUT VERBINDLICH :
-Der GESAMTE Output (thema, narration, visuell, ambiance, genre) MUSS AUF DEUTSCH sein,
-UNABHÄNGIG davon, in welcher Sprache die Transkription ist. Auch wenn die Transkription
-auf Englisch, Französisch oder einer anderen Sprache ist — deine JSON-Antwort ist AUSSCHLIESSLICH
-auf DEUTSCH. ÜBERSETZE die Aussagen ins Deutsche.
-Einzige Ausnahme : Eigennamen bleiben unverändert (z. B. "Edward Snowden", nicht "Eduard Schneemann").
+    prompt = f"""Du bist ein FAKTISCHER Video-Analyst für Rohmaterial (Dailies) eines Filmdrehs. Du beschreibst NUR, was in den Belegen unten steht. Du erfindest nichts, deutest keine Gefühle und ergänzt kein Weltwissen.
 
-Antworte AUSSCHLIESSLICH als gültiges JSON mit dieser exakten Struktur, ohne Text außerhalb :
+SPRACHE: Alle Werte auf DEUTSCH (Belege dürfen englisch sein — übersetze sinngemäß, füge nichts hinzu). Eigennamen bleiben unverändert.
 
+ANTWORTFORMAT: NUR gültiges JSON, exakt diese Schlüssel:
 {{
-  "thema": "Hauptthema in EINEM deutschen Satz.",
-  "narration": "Was passiert, in 3-5 SÄTZEN AUF DEUTSCH. Keine Spekulation.",
-  "visuell": "Visueller Stil AUF DEUTSCH : Farbpalette, Beleuchtung, Kadrage, Umgebung.",
-  "ambiance": "Stimmung AUF DEUTSCH (formell/informell, energisch/ruhig …).",
-  "genre": "Genre AUF DEUTSCH (Interview, Doku, Vlog, Kurzfilm, Musikvideo …).",
-  "anwesende_personen": ["Lesbare Namen der anwesenden Sprecher — leite sie aus dem Dialog ab wenn möglich."],
-  "erwaehnte_personen": ["Personen die im Dialog NAMENTLICH erwähnt werden, aber NICHT im Video sind"]
+  "thema": "Worum es in diesem Take geht — EIN Satz, aus Dialog und/oder Bild belegt.",
+  "narration": "Was passiert, chronologisch, 2–4 Sätze. Nur Belegtes; wenn nur Bild ohne Dialog: nur das Sichtbare.",
+  "visuell": "Setting, Personenzahl, Kadrage/Framing, Licht/Farben — NUR aus den Bildbeschreibungen und dem Framing.",
+  "ambiance": "Stimmung NUR wenn aus Dialog belegbar (z. B. Streit, Sorge, Scherz); sonst \"nicht belegbar\".",
+  "genre": "Projektart WÖRTLICH aus dem Projekt-Kontext (z. B. \"Kurzfilm\", \"Dokumentarfilm\", \"Interview\"); steht dort keine: \"unbekannt\" (NICHT raten).",
+  "anwesende_personen": ["Figuren, die im Take sprechen oder sichtbar sind. Nutze die Sprecher-Markierung: spricht Sprecher A eine Figur mit Namen an, ist die angesprochene Figur ein ANDERER Sprecher. Wird ein Glossar-Name im Dialog direkt ANGESPROCHEN (Anrede: \"Babe, …\", \"Yuri, bist du da?\"), ist diese Figur ANWESEND. Namen nur aus Glossar/Projekt-Kontext; unbenannte Personen als \"Person 1\", \"Person 2\" (Anzahl = sichtbare Personen)."],
+  "erwaehnte_personen": ["Namen, über die nur GESPROCHEN wird (dritte Person), die aber nicht anwesend sind — NUR wörtlich im Transkript vorkommende Namen"],
+  "belege": ["2–5 kurze Zitate/Verweise aus Transkript oder Bildbeschreibung mit Zeit, die thema/narration stützen"],
+  "unsicher": ["Was du NICHT sagen kannst (z. B. \"kein Dialog\", \"Personen nicht identifizierbar\")"]
 }}
 
-⚠️ WICHTIGER UNTERSCHIED zwischen den zwei Personen-Feldern :
-- `anwesende_personen` = physisch im Clip präsent. Zahl = Anzahl der diarisierten Sprecher unten.
-  Für JEDEN SPEAKER_NN versuche einen lesbaren Namen aus dem Dialog abzuleiten :
-    * Wenn jemand angesprochen wird ("Mr. Snowden, ...") → dieser Sprecher heißt vermutlich so
-    * Wenn ein Sprecher fragt und ein anderer antwortet, ist der erste der "Interviewer"
-    * Beispiel : bei 2 Sprechern in einem Interview mit Edward Snowden →
-      ["Edward Snowden", "Interviewer"] (NIEMALS ["SPEAKER_00", "SPEAKER_01"])
-    * Wenn KEINE Zuordnung möglich → nutze "Sprecher 1", "Sprecher 2" (auf Deutsch)
-- `erwaehnte_personen` = im Dialog namentlich genannt aber NICHT anwesend (z.B. genannte Politiker).
+REGELN:
+- Keine Personen, Orte, Geräte oder Handlungen, die nicht in Transkript oder Bildbeschreibungen stehen.
+- Keine Prominenten, keine Zuschreibung von Absichten oder Zuständen („will“, „versucht“, „genießt“, „scheint“, „wirkt“).
+- Anrede ≠ Sprecher: In „Babe, ich geh Tee machen“ ist BABE die angesprochene Person, NICHT die sprechende. Ordne Handlungen nur dann einer Figur zu, wenn das eindeutig ist; sonst „eine Person“.
+- Ist das Transkript leer, sind thema/narration rein visuell und `ambiance` = "nicht belegbar".
+- Wenn du dir bei einem Feld nicht sicher bist: leer/„nicht belegbar“ statt raten.
 
-⚠️ STRENGE REGELN ZUR VERMEIDUNG VON HALLUZINATIONEN :
-- KEINE Personen erfinden, die nicht in Transkription oder Beschreibungen vorkommen.
-- KEINE Prominenten hinzufügen (z. B. „Obama", „Assange") NUR weil das Thema politisch klingt — sondern NUR wenn ihr Name tatsächlich in der Transkription vorkommt.
-- Die diarisierten Sprecher unten sind die ANWESENDEN Personen — nutze sie als einzige Quelle für `anwesende_personen`.
-- Wenn du nicht sicher bist, gib eine leere Liste `[]` zurück, statt zu erfinden.
+── Projekt-Kontext (vom Nutzer, gilt als Fakt) ──
+{projekt_kontext or "(keiner hinterlegt)"}
+Glossar (Figuren/Begriffe): {", ".join(glossar) if glossar else "(leer)"}
 
-── Metadaten ──────────────────────────
-Dateiname : {clip.dateiname}
-Dauer : {clip.dauer:.1f}s · Auflösung : {clip.aufloesung} · {clip.bildrate} fps
-Szenen erkannt : {len(szenen)}
-Framing-Verteilung : {framing_summary or "unbekannt"}
+── Metadaten (Fakten) ──
+Datei: {clip.dateiname}{(" · " + take_zeile) if take_zeile else ""}
+Dauer: {clip.dauer:.0f}s · {clip.aufloesung} · Ton: {ton_zeile}
+Szenen (Schnitte im Take): {len(szenen)} · Framing: {framing_summary or "unbekannt"}
+Sichtbare Personen: {personen_block}
+Stimmen: {speaker_block}
 
-── Sprecher (pyannote-Diarization, ANWESENDE Personen) ──
-{speaker_block}
-
-── Beschreibungen der Szenen (Moondream/LLaMA3) ──
+── Bildbeschreibungen (Bildmodell, Stichproben mit Zeit; englisch, faktisch) ──
 {beschreibungen_text or "(keine)"}
 
-── Transkription (mlx-whisper — EINZIGE Quelle für Namen) ──
-{transkript_text or "(keine Sprache)"}
+── Transkript (Whisper, mit Zeit) ──
+{transkript_text or "(kein Dialog)"}
 
-Antworte JETZT nur mit dem JSON, faktisch und ohne Erfindungen."""
+Antworte JETZT nur mit dem JSON."""
+
+    # Modellwahl: qwen2.5:14b (deutlich besser in Deutsch/JSON-Treue) > OLLAMA_MODEL (llama3).
+    import os as _os
+    from backend.core.vision_describe import modell_verfuegbar
+    modell = _os.getenv("OLLAMA_SYNTHESE_MODEL") or ("qwen2.5:14b" if modell_verfuegbar("qwen2.5:14b") else OLLAMA_MODEL)
 
     try:
-        async with httpx.AsyncClient(timeout=180) as client:
+        async with httpx.AsyncClient(timeout=240) as client:
             r = await client.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": modell,
                     "prompt": prompt,
                     "stream": False,
                     "format": "json",
-                    "options": {"temperature": 0.15, "num_predict": 900, "top_p": 0.8},
+                    "keep_alive": "3m",
+                    "options": {"temperature": 0.0, "num_predict": 1000, "top_p": 0.8, "num_ctx": 8192},
                 },
             )
             r.raise_for_status()
@@ -641,17 +776,129 @@ Antworte JETZT nur mit dem JSON, faktisch und ohne Erfindungen."""
     raw_answer = (data.get("response") or "").strip()
     try:
         synthese = _json.loads(raw_answer)
+        if not isinstance(synthese, dict):
+            raise ValueError("kein Objekt")
     except Exception:
-        # Fallback : encapsule dans un champ narration si le JSON est cassé
-        synthese = {"thema": "?", "narration": raw_answer[:1000], "visuell": "", "ambiance": "", "genre": "?", "personen": []}
+        synthese = {"thema": "?", "narration": raw_answer[:1000], "visuell": "", "ambiance": "", "genre": "?",
+                    "anwesende_personen": [], "erwaehnte_personen": [], "belege": [], "unsicher": ["JSON des Modells unlesbar"]}
+
+    # ── Nachprüfung (deterministisch): Namen müssen belegt sein ──
+    import re as _re
+    hinweise: list[str] = []
+    transkript_lc = transkript_text.lower()
+    erlaubte_namen = {g.lower(): g for g in glossar}
+    for m in _re.finditer(r"\b([A-ZÄÖÜ][a-zäöüß]+)\b", projekt_kontext or ""):
+        erlaubte_namen.setdefault(m.group(1).lower(), m.group(1))
+
+    def _liste(v) -> list[str]:
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        if isinstance(v, str) and v.strip():
+            return [x.strip() for x in _re.split(r"[,;]", v) if x.strip()]
+        return []
+
+    anwesend_raw = _liste(synthese.get("anwesende_personen") or synthese.get("personen"))
+    anwesend: list[str] = []
+    for n in anwesend_raw:
+        nl = n.lower()
+        if _re.fullmatch(r"(person|sprecher|speaker|figur)\s*_?\d+", nl):
+            anwesend.append(n); continue
+        if nl in erlaubte_namen and (nl in transkript_lc or not hat_dialog):
+            anwesend.append(erlaubte_namen[nl]); continue
+        if nl in transkript_lc:
+            anwesend.append(n); continue
+        hinweise.append(f"„{n}“ als anwesend genannt, aber weder Glossar noch Transkript belegen den Namen — entfernt.")
+    erwaehnt = []
+    for n in _liste(synthese.get("erwaehnte_personen")):
+        if n.lower() in transkript_lc:
+            erwaehnt.append(n)
+        else:
+            hinweise.append(f"„{n}“ als erwähnt genannt, kommt im Transkript nicht vor — entfernt.")
+    # Anrede-Regel (deterministisch): Ein Glossar-Name, der im Transkript als Anrede steht
+    # („Babe, …“, „Yuri. Bist du da?“, alleinstehend „Yuri.“), gehört zu einer ANWESENDEN Figur.
+    def _angesprochen(name: str) -> int:
+        pat = _re.compile(r"(?:^|[.!?,;:]\s*)" + _re.escape(name) + r"(?=\s*(?:[,.!?;:]|$))", _re.IGNORECASE)
+        return sum(1 for ln in transkript_lines if pat.search(_re.sub(r"^\[\d+s\]\s*", "", ln)))
+    for n in list(erwaehnt):
+        k = _angesprochen(n)
+        if k >= 1 and n.lower() in erlaubte_namen:
+            erwaehnt.remove(n)
+            if n not in anwesend:
+                anwesend.append(n)
+            hinweise.append(f"„{n}“ wird im Dialog {k}× direkt angesprochen → als anwesend eingeordnet.")
+    for nl, n in erlaubte_namen.items():
+        if n not in anwesend and n not in erwaehnt and _angesprochen(n) >= 2:
+            anwesend.append(n)
+            hinweise.append(f"„{n}“ wird im Dialog {_angesprochen(n)}× direkt angesprochen → anwesend ergänzt.")
+    # Platzhalter „Person n“ raus, wenn dieselbe Zahl an benannten Figuren belegt ist
+    benannt = [a for a in anwesend if not _re.fullmatch(r"(person|sprecher|speaker|figur)\s*_?\d+", a.lower())]
+    if benannt and personen_max and len(benannt) >= personen_max:
+        anwesend = benannt
+    synthese["anwesende_personen"] = anwesend
+    synthese["erwaehnte_personen"] = erwaehnt
+    synthese["personen"] = anwesend  # Abwärtskompatibel (altes UI-Feld)
+    synthese["belege"] = _liste(synthese.get("belege"))[:6]
+    unsicher = _liste(synthese.get("unsicher"))
+    if not hat_dialog:
+        unsicher.append("Kein Dialog transkribiert — Aussagen beruhen nur auf Bildbeschreibungen.")
+    if not hat_bild:
+        unsicher.append("Keine Bildbeschreibungen — Aussagen beruhen nur auf dem Dialog.")
+    if not projekt_kontext:
+        unsicher.append("Kein Projekt-Kontext hinterlegt (Einstellungen) — Genre/Figuren nicht zuordenbar.")
+    if not speakers:
+        unsicher.append("Keine Sprecher-Diarization — Zahl der Sprechenden ist nicht belegt.")
+    synthese["unsicher"] = unsicher
+    synthese["hinweise"] = hinweise
+    synthese["belege_zahl"] = {"dialog_segmente": len(transkript_lines), "bildbeschreibungen": len(beschreibungen), "sprecher": len(speakers)}
+    if not projekt_kontext and str(synthese.get("genre") or "").strip().lower() not in ("", "unbekannt", "?"):
+        hinweise.append(f"Genre „{synthese.get('genre')}“ ist geraten (kein Projekt-Kontext) — auf „unbekannt“ gesetzt.")
+        synthese["genre"] = "unbekannt"
 
     synthese["generated_at"] = _dt.datetime.utcnow().isoformat() + "Z"
-    synthese["model"] = OLLAMA_MODEL
+    synthese["model"] = modell
 
     clip.synthese_json = synthese
     await db.commit()
 
     return {"clip_id": str(clip.id), "cached": False, "synthese": synthese}
+
+
+# ─── Neu transkribieren ─────────────────────────────────
+
+@router.post("/{clip_id}/transkribieren")
+async def clip_neu_transkribieren(clip_id: str, db: AsyncSession = Depends(get_db)):
+    """Nur die Tonspur neu durch Whisper schicken (aktuelle Einstellungen: Sprache/Glossar/Modell/Kanal).
+    Proxy, Szenen, Embeddings bleiben; die Szenen-Transkripte werden ersetzt."""
+    from backend.workers.ingest import transkribieren
+    clip = (await db.execute(select(Clip).where(Clip.id == clip_id))).scalar_one_or_none()
+    if not clip:
+        raise HTTPException(404, "Clip nicht gefunden.")
+    job = Job(id=uuid.uuid4(), typ="transkription", clip_id=clip.id, status="wartend", fortschritt=0, nachricht="Neu-Transkription wartet…")
+    db.add(job)
+    await db.commit()
+    task = transkribieren.delay(str(clip.id), str(job.id))
+    job.celery_task_id = task.id
+    await db.commit()
+    return {"job_id": str(job.id)}
+
+
+@router.post("/{clip_id}/neu-analysieren")
+async def clip_neu_analysieren(clip_id: str, db: AsyncSession = Depends(get_db)):
+    """Komplette Analyse erneut (Ton, Whisper, Szenen, Bildanalyse mit Stichproben, Embeddings).
+    Alte Szenen/Sprecher werden ersetzt (keine Duplikate), Proxy wird wiederverwendet, Bericht-Cache geleert."""
+    from backend.workers.ingest import ingestion_pipeline
+    clip = (await db.execute(select(Clip).where(Clip.id == clip_id))).scalar_one_or_none()
+    if not clip:
+        raise HTTPException(404, "Clip nicht gefunden.")
+    clip.status = "hochgeladen"
+    clip.synthese_json = None
+    job = Job(id=uuid.uuid4(), typ="ingestion", clip_id=clip.id, status="wartend", fortschritt=0, nachricht="Neu-Analyse wartet…")
+    db.add(job)
+    await db.commit()
+    task = ingestion_pipeline.delay(str(clip.id), str(job.id))
+    job.celery_task_id = task.id
+    await db.commit()
+    return {"job_id": str(job.id)}
 
 
 # ─── Clip löschen ────────────────────────────────────────
@@ -668,9 +915,10 @@ async def clip_loeschen(clip_id: str, db: AsyncSession = Depends(get_db)):
     if not clip:
         raise HTTPException(404, "Clip nicht gefunden.")
 
-    # Datei löschen
+    # Datei löschen — NUR Upload-Kopien. Per Referenz importierte Originale
+    # (Clip mit take_id / Pfad außerhalb von UPLOAD_DIR) werden NIE angefasst.
     pfad = Path(clip.dateipfad)
-    if pfad.exists():
+    if pfad.exists() and not clip.take_id and ist_upload_datei(clip.dateipfad):
         pfad.unlink()
 
     # Thumbnails löschen

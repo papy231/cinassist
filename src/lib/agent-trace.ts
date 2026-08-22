@@ -79,21 +79,43 @@ export function traceToProposals(
     const thoughtEvt = [...trace.slice(0, i)].reverse().find((e) => e.type === "thought");
     const agentThought = typeof thoughtEvt?.content === "string" ? thoughtEvt.content : undefined;
 
+    // ── Kommando-Proposals (edit_timeline, lege_alternativen, …): server-validierte Kommandos → Proposal 1:1.
+    if (obs.proposal === true && Array.isArray(obs.commands)) {
+      const cmds = obs.commands as TimelineCmd[];
+      if (cmds.length > 0) {
+        const warn = Array.isArray(obs.warnungen) ? (obs.warnungen as string[]) : [];
+        proposals.push({
+          title: typeof obs.titel === "string" && obs.titel ? obs.titel : "Timeline-Bearbeitung",
+          summary: [typeof obs.zusammenfassung === "string" ? obs.zusammenfassung : `${cmds.length} Kommando(s)`,
+                    ...warn.slice(0, 2)].join(" · "),
+          edits: cmds,
+          provenance: { tool: toolName, params: (actionEvt?.args ?? {}) as Record<string, unknown>, agentThought },
+        });
+      }
+      continue;
+    }
+
     // ── Tools de génération → charge la séquence sur la timeline (loadSequence).
-    const GEN_TOOLS = new Set(["generate_story", "generate_timeline_from_prompt"]);
+    const GEN_TOOLS = new Set(["generate_story", "generate_timeline_from_prompt", "regenerate_schnittplan", "swap_beat_source", "lege_sequenzen_chronologisch"]);
     if (GEN_TOOLS.has(toolName)) {
       const segsRaw = obs.segments as unknown;
       if (!Array.isArray(segsRaw) || segsRaw.length === 0) continue;
-      const segments: Array<{ clipId: string; mediaStart: number; duration: number; name?: string }> = [];
+      const segments: Array<{ clipId: string; mediaStart: number; duration: number; name?: string;
+                              start?: number; videoTrackIndex?: number; videoOnly?: boolean }> = [];
       for (const raw of segsRaw) {
         if (typeof raw !== "object" || raw === null) continue;
-        const s = raw as { clip_id?: string; media_start?: number; duration?: number; clip_name?: string };
+        const s = raw as { clip_id?: string; media_start?: number; duration?: number; clip_name?: string;
+                           start?: number; video_track_index?: number; video_only?: boolean };
         if (typeof s.clip_id !== "string" || typeof s.duration !== "number") continue;
         segments.push({
           clipId: s.clip_id,
           mediaStart: typeof s.media_start === "number" ? s.media_start : 0,
           duration: s.duration,
           name: s.clip_name,
+          // Overlay-Felder (Alternativen/Cutaways): absolute Position, obere Spur, stumm
+          ...(typeof s.start === "number" ? { start: s.start } : {}),
+          ...(typeof s.video_track_index === "number" ? { videoTrackIndex: s.video_track_index } : {}),
+          ...(s.video_only ? { videoOnly: true } : {}),
         });
       }
       if (segments.length === 0) continue;
@@ -103,6 +125,9 @@ export function traceToProposals(
       const titleByTool: Record<string, string> = {
         generate_story: "Auto-Rohschnitt",
         generate_timeline_from_prompt: "Timeline aus Prompt",
+        regenerate_schnittplan: "Neuer Schnittplan (Beats)",
+        swap_beat_source: "Beat-Quelle getauscht",
+        lege_sequenzen_chronologisch: "Chronologische Sichtungs-Fassung",
       };
       const base = titleByTool[toolName] ?? "Timeline generieren";
       // replace=true : le résultat d'une génération EST la timeline (premier montage

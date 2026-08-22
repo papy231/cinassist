@@ -1,23 +1,23 @@
 """
 CinAssist — Speaker Diarization (Vague 1.2)
 
-Utilise pyannote.audio 3.3.2 avec le pipeline pré-entraîné
-`pyannote/speaker-diarization-3.1` pour identifier "qui parle quand".
+Nutzt pyannote.audio 3.3.2 mit der vortrainierten Strecke
+`pyannote/speaker-diarization-3.1`, um zu bestimmen, wer wann spricht.
 
-⚠️ Nécessite un token HuggingFace + acceptation de la licence des modèles
-sur huggingface.co/pyannote/speaker-diarization-3.1 et
+Erfordert ein HuggingFace-Token und die Zustimmung zu den Modelllizenzen
+auf huggingface.co/pyannote/speaker-diarization-3.1 sowie
 huggingface.co/pyannote/segmentation-3.0
 
-Le token est lu depuis :
+Das Token wird gelesen aus:
     1. env var HUGGINGFACE_HUB_TOKEN
-    2. fichier ~/.openclaw/workspace/.secrets/huggingface.json (clé "token")
+    2. Datei ~/.openclaw/workspace/.secrets/huggingface.json, Schlüssel "token"
     3. ~/.cache/huggingface/token (standard huggingface-cli login)
 
 Résultat : liste de segments {start, end, speaker_label} (SPEAKER_00, SPEAKER_01, ...).
-Ces labels auto sont ensuite renommés manuellement par l'utilisateur ("Anna",
-"Marc") via un endpoint dédié.
+Diese automatisch vergebenen Bezeichnungen werden anschließend von Hand umbenannt ("Anna",
+"Marc"), über einen eigenen Endpunkt.
 
-Latence : ~5-15s pour 1 min d'audio sur M4 (MPS accelerated).
+Rechenzeit: etwa fünf bis fünfzehn Sekunden je Minute Ton auf dem M4, mit MPS-Beschleunigung.
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def _resolve_hf_token() -> str | None:
 
 
 def _get_pipeline():
-    """Lazy load pyannote pipeline. Retourne None si token/licence manquants."""
+    """Lädt die pyannote-Strecke bei Bedarf. Ohne Token oder Lizenz kommt None zurück."""
     global _pipeline, _pipeline_error
     if _pipeline is not None or _pipeline_error is not None:
         return _pipeline
@@ -100,16 +100,16 @@ def diarize_audio(
     min_speaker_time_s: float = 3.0,
 ) -> dict:
     """
-    Analyse un fichier audio (.wav mono 16kHz idéalement) et retourne
-    la structure des interventions de chaque locuteur.
+    Wertet eine Tondatei aus, am besten .wav in Mono mit 16 kHz, und gibt
+    den Aufbau der Redebeiträge je Sprecher zurück.
 
     Args:
         num_speakers: nombre exact de speakers attendus (interview 2 → passe 2).
-                     Prioritaire sur min/max.
+                     Hat Vorrang vor min und max.
         min_speakers / max_speakers: bornes si `num_speakers` inconnu (ex: min=2, max=4).
-        min_speaker_time_s: post-filter — retire les speakers avec un temps
-                            de parole total inférieur à ce seuil (probables
-                            faux positifs pyannote sur discours long).
+        min_speaker_time_s: nachgelagerter Filter, der Sprecher entfernt, deren
+                            gesamte Sprechzeit unter diesem Schwellwert liegt, meist
+                            Fehlerkennungen von pyannote bei langen Reden.
 
     Retour :
         {
@@ -157,9 +157,12 @@ def diarize_audio(
             "hint_used": pipe_kwargs or None,
         }
 
+    # pyannote 4.x: pipeline(...) liefert ein DiarizeOutput mit `.speaker_diarization` (Annotation);
+    # 3.x gab die Annotation direkt zurück. Beides unterstützen.
+    annotation = getattr(result, "speaker_diarization", None) or getattr(result, "exclusive_speaker_diarization", None) or result
     raw_segments: list[dict] = []
     times_by_speaker: dict[str, float] = {}
-    for turn, _, label in result.itertracks(yield_label=True):
+    for turn, _, label in annotation.itertracks(yield_label=True):
         dur = float(turn.end - turn.start)
         raw_segments.append({
             "start": round(turn.start, 3),
@@ -168,7 +171,7 @@ def diarize_audio(
         })
         times_by_speaker[label] = times_by_speaker.get(label, 0.0) + dur
 
-    # Post-filter : retire les speakers en dessous du seuil
+    # Nachfilter: entfernt Sprecher unterhalb der Schwelle
     keep = {s for s, t in times_by_speaker.items() if t >= min_speaker_time_s}
     dropped = set(times_by_speaker) - keep
     filtered_segments = [s for s in raw_segments if s["speaker"] in keep]
@@ -185,7 +188,7 @@ def diarize_audio(
 
 
 def summarize_by_speaker(segments: list[dict]) -> dict[str, dict]:
-    """Aggrège par speaker : {speaker_label: {total_time, segment_count, first_appearance}}."""
+    """Fasst je Sprecher zusammen: {speaker_label: {total_time, segment_count, first_appearance}}."""
     agg: dict[str, dict] = {}
     for s in segments:
         lbl = s["speaker"]
@@ -202,9 +205,9 @@ def match_speakers_to_scenes(
     scene_ranges: list[tuple[float, float]],
 ) -> list[dict[str, float]]:
     """
-    Pour chaque scène (start, end), retourne un dict {speaker_label: overlap_seconds}.
+    Gibt je Szene (start, end) ein Wörterbuch {speaker_label: overlap_seconds} zurück.
 
-    Utile pour peupler la table scene_speakers.
+    Dient dazu, die Tabelle scene_speakers zu füllen.
     """
     out: list[dict[str, float]] = []
     for s_start, s_end in scene_ranges:

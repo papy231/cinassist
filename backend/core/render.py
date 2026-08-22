@@ -1,18 +1,18 @@
 """
 CinAssist — Rendu MP4 direct (Vagues 4.1 + 4.2).
 
-Pour les vidéomonteurs qui veulent un livrable final (pas juste un FCPXML) :
-    - Rough cut → MP4 dans un aspect ratio donné (16:9, 9:16, 1:1)
-    - Optional : sous-titres burnt-in depuis Whisper transkription_json
+Für Schnittleute, die ein fertiges Ergebnis wollen und nicht nur ein FCPXML:
+    - Rohschnitt als MP4 in einem gewählten Seitenverhältnis (16:9, 9:16, 1:1)
+    - Wahlweise eingebrannte Untertitel aus der Whisper-Transkription
 
-Utilise FFmpeg directement (sans Celery, synchrone). Latence ~1s / seconde
-de sortie sur M4 avec libx264 preset ultrafast.
+Nutzt FFmpeg unmittelbar, ohne Celery und im gleichen Ablauf. Etwa eine Sekunde Rechenzeit
+je Sekunde Ausgabe auf dem M4, mit libx264 und der Voreinstellung ultrafast.
 
 Format segment attendu :
     {clip_path, clip_name, media_start, duration}
 
 Aspect ratios :
-    - "16:9" : crop centré ou passthrough si source déjà 16:9
+    - "16:9": mittiger Beschnitt, oder unverändert, wenn die Quelle schon 16:9 ist
     - "9:16" : crop centré vertical (mobile portrait)
     - "1:1"  : crop centré carré (Instagram feed)
 """
@@ -45,7 +45,7 @@ def _tmp_dir() -> Path:
 
 
 def _has_audio(clip_path: str | Path) -> bool:
-    """True si le fichier source contient au moins une piste audio (via ffprobe)."""
+    """Wahr, wenn die Quelldatei mindestens eine Tonspur enthält, geprüft über ffprobe."""
     try:
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a",
@@ -58,18 +58,18 @@ def _has_audio(clip_path: str | Path) -> bool:
 
 
 def _dump_stderr(prefix: str, stderr: str) -> Path:
-    """Sauve stderr complet dans /tmp et retourne le path."""
+    """Sichert die vollständige Fehlerausgabe in /tmp und gibt den Pfad zurück."""
     p = TEMP_DIR / f"cinassist_ffmpeg_{prefix}_{uuid.uuid4().hex[:8]}.log"
     p.write_text(stderr or "", encoding="utf-8", errors="replace")
     return p
 
 
 def _extract_segment(seg: dict, aspect: str, subtitle_path: Path | None, out_path: Path) -> None:
-    """Extrait un segment avec crop + optional subtitles burnt.
+    """Schneidet ein Segment heraus, mit Beschnitt und wahlweise eingebrannten Untertiteln.
 
-    Normalise l'audio : si le clip source n'a pas de piste audio, on en génère
-    une (silence AAC) via anullsrc. Cela permet au concat -c copy de fonctionner
-    quand on mélange des segments avec/sans audio (cause du bug #3 du rapport nocturne).
+    Vereinheitlicht den Ton: fehlt dem Ausgangsclip eine Tonspur, wird über anullsrc
+    eine stille AAC-Spur erzeugt. Erst dadurch arbeitet concat -c copy auch dann,
+    wenn Segmente mit und ohne Ton gemischt werden.
     """
     vf_chain = [ASPECT_FILTERS[aspect]]
     if subtitle_path and subtitle_path.exists():
@@ -114,10 +114,10 @@ def _extract_segment(seg: dict, aspect: str, subtitle_path: Path | None, out_pat
 
 
 def _concat_segments(segment_paths: list[Path], out_path: Path) -> None:
-    """Concat multiple .mp4 en un seul via ffmpeg concat demuxer.
+    """Fügt mehrere .mp4 über den concat-Demuxer von ffmpeg zu einer Datei zusammen.
 
-    Fallback : si -c copy échoue (streams incompatibles malgré la normalisation),
-    on re-encode. Plus lent mais garanti de marcher.
+    Rückfall: scheitert -c copy, weil die Spuren trotz Vereinheitlichung nicht zusammenpassen,
+    wird neu kodiert. Das dauert länger, gelingt aber sicher.
     """
     concat_list = out_path.with_suffix(".concat.txt")
     concat_list.write_text("\n".join(f"file '{p}'" for p in segment_paths))
@@ -155,7 +155,7 @@ def _srt_from_whisper_segments(
     speech_segments: list[dict],
     time_offset: float = 0.0,
 ) -> str:
-    """Convertit Whisper segments → SRT string. time_offset décale les timings."""
+    """Wandelt Whisper-Segmente in eine SRT-Zeichenkette. time_offset verschiebt die Zeiten."""
     def fmt(t: float) -> str:
         t = max(0.0, t)
         h = int(t // 3600)
@@ -185,13 +185,13 @@ def render_mp4(
     subtitles_srt: str | None = None,
 ) -> dict:
     """
-    Rend une liste de segments en un MP4 unique.
+    Rechnet eine Liste von Segmenten zu einer einzigen MP4-Datei.
 
     Args:
         segments: [{clip_path, clip_name, media_start, duration}, ...]
         aspect_ratio: 16:9 | 9:16 | 1:1
-        name: nom du fichier de sortie
-        subtitles_srt: contenu SRT complet à burn-in (None = pas de subs)
+        name: Name der Ausgabedatei
+        subtitles_srt: vollständiger SRT-Inhalt zum Einbrennen, None bedeutet keine Untertitel
 
     Returns:
         {path, size_bytes, duration_s, aspect_ratio, segment_count, elapsed_s}
@@ -245,14 +245,14 @@ def render_mp4(
 
 # ─── Détection BPM / beats (V4.3) ────────────────────────────
 def detect_beats(clip_path: str | Path) -> dict:
-    """Détecte BPM et beat timestamps via librosa. Retourne {tempo, beat_times, count}."""
+    """Bestimmt Tempo und Taktzeitpunkte über librosa. Zurück kommt {tempo, beat_times, count}."""
     try:
         import librosa
         import numpy as np
     except ImportError as e:
         return {"error": f"librosa not installed: {e}"}
     try:
-        # Force ffmpeg extraction pour ne pas dépendre du décodeur audio de librosa
+        # Erzwingt die Extraktion über ffmpeg, um nicht vom Audiodecoder von librosa abzuhängen
         tmp_audio = TEMP_DIR / f"beats_{uuid.uuid4().hex[:8]}.wav"
         subprocess.run(
             ["ffmpeg", "-y", "-i", str(clip_path), "-vn", "-ac", "1",
@@ -265,7 +265,7 @@ def detect_beats(clip_path: str | Path) -> dict:
         tmp_audio.unlink(missing_ok=True)
         tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
         beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-        # librosa 0.11+ retourne tempo comme np.ndarray 0-d → asarray().item() gère les 2 cas
+        # librosa ab 0.11 gibt das Tempo als nulldimensionales Array zurück; asarray().item() deckt beide Fälle ab
         tempo_scalar = float(np.asarray(tempo).item()) if np.asarray(tempo).ndim == 0 else float(np.asarray(tempo).flat[0])
         return {
             "tempo_bpm": round(tempo_scalar, 1),

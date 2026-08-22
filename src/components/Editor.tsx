@@ -9,7 +9,8 @@ import {
   tlClipsToEngineTracks,
 } from "@/lib/timeline-model";
 import ClipWaveform from "@/components/ClipWaveform";
-import { sendToApp, type NleApp, type ExportSegment } from "@/lib/api";
+import { sendToApp, type NleApp, type ExportSegment, connectJobWs, fetchOrdner, fetchTranskriptionEinstellungen, fetchProjektEinstellungen, saveProjektEinstellungen, saveTranskriptionEinstellungen, clipNeuTranskribieren, clipNeuAnalysieren, type TranskriptionEinstellungen, createOrdner, renameOrdner, deleteOrdner, moveClipsToOrdner, importOrdnerInMedien, moveOrdner, type OrdnerDTO } from "@/lib/api";
+import OrdnerBrowser from "@/components/OrdnerBrowser";
 import { planPlacement, hasCollision, findFreeTrack } from "@/lib/timeline-placement";
 import type { TimelineCmd, TimelineCommandExecutor } from "@/lib/timeline-commands";
 import { useProposalStore } from "@/lib/proposals";
@@ -17,6 +18,9 @@ import { ProposalSplitsLayer, ProposalDeletesInRow, ProposalSummaryBadges, getFi
 import ChatPanel from "@/components/ChatPanel";
 import { useChatStore } from "@/lib/chat-store";
 import ClipAnalysisModal from "@/components/ClipAnalysisModal";
+import SyncPanel from "@/components/SyncPanel";
+import SkriptPanel from "@/components/SkriptPanel";
+import type { SchnittplanDTO } from "@/lib/api";
 import { useIsMobile } from "@/lib/use-media-query";
 
 // Sequence frame rate. The engine keeps time in integer frames; the existing
@@ -45,8 +49,27 @@ type ClipDTO = {
   proxy_url: string | null;
   waveform_url: string | null;
   strip_url: string | null;
+  ordner_id?: string | null;   // Medien-Ordner (Bin), null/undefined = Wurzel
+  take_id?: string | null;     // Sync-Take (Clip per Referenz)
+  medientyp?: "video" | "audio"; // reine Audiodatei → Audio-only-Clip (nur A-Spur)
+  medienart?: "video" | "audio" | "av"; // Etikett aus der Ingestion: nur Bild | nur Ton | Bild+Ton
+  sync?: { take_id: string; status: string; multicam_gruppe: string | null; szene: number | null; plan: number | null; prise: number | null;
+           tc_start: string | null; tc_start_s: number | null; ton: { dateiname: string; offset_s: number; methode: string; konfidenz: number } | null } | null;
 };
-type TimelineDTO = { id: string; name: string; erstellt_am: string | null };
+type TimelineDTO = { id: string; name: string; erstellt_am: string | null; stil?: string | null };
+
+/**
+ * Regel für Timeline-Segmente aus Medien: eine reine Audiodatei (mp3/wav …) bekommt NIE eine
+ * Bildhälfte (audioOnly, nur A-Spur `aIdx`, videoTrackIndex = −1−aIdx → keine V-Kollision);
+ * ein Video ohne Tonspur bekommt keine Audiohälfte (hasAudio=false).
+ */
+const medienSegmentFelder = (src: { medientyp?: "video" | "audio"; medienart?: "video" | "audio" | "av"; waveform_url?: string | null } | undefined | null, aIdx: number) => {
+  const art = src?.medienart ?? (src?.medientyp === "audio" ? "audio" : undefined);
+  if (art === "audio" || src?.medientyp === "audio")
+    return { audioOnly: true as const, hasAudio: true, stripUrl: null, videoTrackIndex: -1 - aIdx, audioTrackIndex: aIdx };
+  // "video" = Bild ohne brauchbaren Ton → keine Audiohälfte; "av" oder unbekannt → nach Waveform.
+  return { hasAudio: art === "video" ? false : art === "av" ? true : !!src?.waveform_url };
+};
 type ScheneMatch = {
   scene_id: string;
   clip_id: string;
@@ -63,6 +86,14 @@ type ScheneMatch = {
   text_score?: number;          // composante texte BM25 (0-1)
   framing?: string | null;      // extreme_closeup|closeup|medium|wide_with_person|wide_no_person
   face_count?: number | null;
+  // Dialog-Treffer (Whisper-Wortzeitstempel)
+  treffer_art?: "dialog" | "visuell" | "beides" | null;
+  treffer_zeit?: number | null;
+  treffer_wort?: string | null;
+  treffer_snippet?: string | null;
+  treffer_zeiten?: number[] | null;
+  treffer_konfidenz?: number | null;
+  ordner_id?: string | null;
 };
 
 type SearchFilters = {
@@ -144,12 +175,28 @@ const ToolDivider = () => <div style={{ width: 1, height: 22, background: "rgba(
 /* ═══════════════════════════════════════════════════════════
    Statische Fallbacks (falls Backend offline)
    ═══════════════════════════════════════════════════════════ */
+// Reihenfolge nach dem Arbeitsweg: erst das Drehbuch, dann das Material, dann der Schnitt.
+// Beide Zweige sind voneinander unabhängig; zusammengeführt werden sie in der Kontext-Schicht.
 const TABS = [
+  { id: "skript", label: "Skript & Kontext" },
+  { id: "sync", label: "Synchronisation" },
   { id: "cut", label: "Schnitt" },
   { id: "edit", label: "Bearbeiten" },
   { id: "color", label: "Farbe" },
   { id: "sound", label: "Ton" },
 ];
+/** Was in jedem Schritt zu tun ist, in einem Satz. Steht hier gebündelt, damit die
+ *  Formulierungen nicht über die Oberfläche verstreut sind. */
+const WEGWEISER: Record<number, string> = {
+  1: "Drehbuch hochladen, als PDF oder TXT. Ohne Drehbuch laufen Material und Auswertung trotzdem, nur der Schnittplan bleibt aus.",
+  2: "Den Ordner mit den Kameradateien einlesen. Ein getrennter Ton-Ordner ist nur nötig, wenn der Ton nicht in der Kamera liegt.",
+  3: "Synchronisieren. Bild und Ton werden über Timecode und Klappe einander zugeordnet, je Aufnahme entsteht ein Take.",
+  4: "Die Takes in die Medien übernehmen. Dabei werden sie in Ordner sortiert.",
+  5: "Die Auswertung starten: Szenentrennung, Transkription, Bildbeschreibung, Sprecher und Gesichter. Das dauert einige Minuten je Aufnahme.",
+  6: "Kontext aufbauen. Hier treffen Drehbuch und Material aufeinander, über die gesprochene Klappe und die Transkription.",
+  7: "Schnittplan erzeugen. Jeder Eintrag kommt mit Begründung und Beleg, nachzulesen im Prüfbericht.",
+};
+
 const FIT_MODES = ["An Bildschirm anpassen", "50 %", "100 %", "200 %"];
 
 const FALLBACK_GRADS = [
@@ -212,6 +259,12 @@ type TLClip = {
   proxyUrl: string | null;
   videoUrl: string | null;   // Original-Upload — Fallback wenn der Proxy kaputt ist (0-Byte → 416)
   hasAudio: boolean;
+  // Audio-only-Clip (mp3/wav …): keine Bildhälfte. Lebt NUR auf der A-Spur `audioTrackIndex`;
+  // `videoTrackIndex` ist dann −1−audioTrackIndex (nie eine echte V-Spur → keine V-Kollisionen,
+  // Kollisionen nur untereinander auf derselben A-Spur).
+  audioOnly?: boolean;
+  /** Stumme Alternative (V3+) aus dem Beat-Planer — Spuren mit ausschließlich solchen Clips werden beim Laden ausgeblendet. */
+  istAlternative?: boolean;
   videoTrackIndex?: number;  // Multi-track : auf welcher V-Spur (0 = V1 = oben). Default 0.
   audioTrackIndex?: number;  // Multi-track : auf welcher A-Spur. Default = videoTrackIndex.
   // ── A/V-Verknüpfung ────────────────────────────────────────────────────────
@@ -499,8 +552,23 @@ export default function Editor() {
   const [inPoint, setInPoint] = useState<number | null>(null);
   const [outPoint, setOutPoint] = useState<number | null>(null);
   const [mediaFilter, setMediaFilter] = useState<"all" | "video" | "audio">("all");
-  const [mediaSort, setMediaSort] = useState<"default" | "name" | "duration" | "recent">("default");
+  const [mediaSort, setMediaSort] = useState<"default" | "name" | "duration" | "recent" | "timecode" | "szene">("default");
   const [mediaView, setMediaView] = useState<"grid" | "list">("grid");
+  // Medien-Ordner (Bins): flache Liste + aktueller Ordner (null = Wurzel)
+  const [ordnerListe, setOrdnerListe] = useState<OrdnerDTO[]>([]);
+  const [aktOrdner, setAktOrdner] = useState<string | null>(null);
+  const [ordnerBrowserOffen, setOrdnerBrowserOffen] = useState(false);
+  const [ordnerWahl, setOrdnerWahl] = useState<{ clipIds: string[] } | null>(null);
+  const [ordnerDropZiel, setOrdnerDropZiel] = useState<string | null>(null);
+  const [ordnerAuswahl, setOrdnerAuswahl] = useState<string | null>(null);   // Einfachklick = auswählen, Doppelklick = öffnen
+  // Transkriptions-Einstellungen (Whisper): Sprache, Glossar, Modell, Kanal — im Einstellungen-Dialog
+  const [transkriptEinst, setTranskriptEinst] = useState<TranskriptionEinstellungen | null>(null);
+  const [glossarText, setGlossarText] = useState("");
+  useEffect(() => { fetchTranskriptionEinstellungen().then((e) => { setTranskriptEinst(e); setGlossarText(e.glossar.join(", ")); }).catch(() => {}); }, []);
+  const [projektKontext, setProjektKontext] = useState<string | null>(null);
+  const [projektMaxSprecher, setProjektMaxSprecher] = useState<string>("");
+  useEffect(() => { fetchProjektEinstellungen().then((e) => { setProjektKontext(e.kontext ?? ""); setProjektMaxSprecher(e.max_sprecher ? String(e.max_sprecher) : ""); }).catch(() => {}); }, []);
+  const refreshOrdner = () => { fetchOrdner().then(setOrdnerListe).catch(() => { /* Backend offline */ }); };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [clipboard, setClipboard] = useState<TLClip[]>([]);
   // Wave 1 : outils pro-toolbar
@@ -643,8 +711,12 @@ export default function Editor() {
         if (cancelled) return;
         const usable = data.filter((c) => c.status === "analysiert" || c.status === "hochgeladen");
         setClips(usable);
+        // Früher (Demo-Modus) wurden hier ALLE Clips automatisch hintereinander auf V1 gelegt.
+        // Jetzt startet die Timeline leer — Clips kommen per Drag & Drop / Doppelklick aus den Medien
+        // (oder später über einen bewussten „Timeline aufbauen“-Schritt).
+        const AUTO_TIMELINE = false;
         let cursor = 0;
-        const initial: TLClip[] = usable.map((c, i) => {
+        const initial: TLClip[] = !AUTO_TIMELINE ? [] : usable.map((c, i) => {
           const dur = c.dauer || 0;
           const seg: TLClip = {
             tlId: `${c.id}-${i}`,
@@ -658,7 +730,7 @@ export default function Editor() {
             waveformUrl: abs(c.waveform_url),
             proxyUrl: abs(c.proxy_url || c.video_url),
             videoUrl: abs(c.video_url),
-            hasAudio: !!c.waveform_url,
+            ...medienSegmentFelder(c, 0),
           };
           cursor += dur;
           return seg;
@@ -669,6 +741,31 @@ export default function Editor() {
       .finally(() => setLoading(false));
     return () => { cancelled = true; };
   }, []);
+
+  // Nach abgeschlossener Analyse: bereits platzierte Timeline-Clips nachziehen (Thumbnail-Strip,
+  // Waveform → Audio-Spur, Proxy). Ein Clip, der noch als „hochgeladen“ auf die Timeline gezogen
+  // wurde, hätte sonst dauerhaft weder Vignetten noch Ton.
+  useEffect(() => {
+    if (clips.length === 0) return;
+    setTlClips((cur) => {
+      let changed = false;
+      const next = cur.map((t) => {
+        const c = clips.find((x) => x.id === t.clipId);
+        if (!c) return t;
+        const strip = abs(c.strip_url), wf = abs(c.waveform_url), proxy = abs(c.proxy_url || c.video_url);
+        const upd: Partial<TLClip> = {};
+        if (strip && !t.stripUrl) upd.stripUrl = strip;
+        if (wf && !t.waveformUrl) { upd.waveformUrl = wf; if (c.medienart !== "video") upd.hasAudio = true; }
+        if (c.medienart === "video" && t.hasAudio && !t.audioOnly) upd.hasAudio = false;   // Etikett sagt: kein Ton
+        if (c.proxy_url && proxy && t.proxyUrl !== proxy) upd.proxyUrl = proxy;
+        if (!t.sourceDuration && c.dauer) { upd.sourceDuration = c.dauer; if (!t.duration) upd.duration = c.dauer; }
+        if (Object.keys(upd).length === 0) return t;
+        changed = true;
+        return { ...t, ...upd };
+      });
+      return changed ? next : cur;
+    });
+  }, [clips]);
 
   useEffect(() => {
     fetch(`${API}/api/timelines`)
@@ -686,8 +783,44 @@ export default function Editor() {
       const data = (await r.json()) as ClipDTO[];
       const usable = data.filter((c) => c.status === "analysiert" || c.status === "hochgeladen");
       setClips(usable);
+      refreshOrdner();
     } catch { /* ignore */ }
   };
+  useEffect(() => {
+    refreshOrdner();
+    // Backend evtl. gerade (neu) am Starten → Ordnerliste periodisch und beim Fokus nachladen,
+    // sonst fehlen die Ordner-Kacheln bis zum nächsten F5.
+    const iv = window.setInterval(refreshOrdner, 15000);
+    const onFocus = () => { refreshOrdner(); void refreshClips(); };
+    window.addEventListener("focus", onFocus);
+    return () => { window.clearInterval(iv); window.removeEventListener("focus", onFocus); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Dateien aus dem Finder dürfen ÜBERALL im Editor abgelegt werden (Monitor, Timeline, Inspektor …):
+  // sie landen im aktuell geöffneten Medien-Ordner. Ohne diese Fänger würde der Browser die Datei
+  // öffnen und die App verlassen. Zonen mit eigenem Handler (Medien-Panel, Ordner-Kacheln) haben
+  // Vorrang — dort ist das Event schon `defaultPrevented`.
+  const aktOrdnerRef = useRef<string | null>(null);
+  useEffect(() => { aktOrdnerRef.current = aktOrdner; }, [aktOrdner]);
+  useEffect(() => {
+    const onDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes("Files")) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; }
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!e.dataTransfer?.files?.length) return;
+      if (e.defaultPrevented) return;            // Medien-Panel / Ordner-Kachel hat's schon genommen
+      e.preventDefault();
+      const n = e.dataTransfer.files.length;
+      handleFiles(e.dataTransfer.files, aktOrdnerRef.current);
+      const zielName = aktOrdnerRef.current ? (ordnerListe.find((o) => o.id === aktOrdnerRef.current)?.name ?? "Ordner") : "Medien";
+      toast(`${n} Datei(en) → ${zielName}`, "info", 2200);
+    };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("drop", onDrop);
+    return () => { window.removeEventListener("dragover", onDragOver); window.removeEventListener("drop", onDrop); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ordnerListe]);
 
   // Poll léger tant qu'il reste des clips en cours d'ingestion (status
   // "hochgeladen" côté backend) — refresh toutes les 4s, s'arrête tout seul
@@ -739,11 +872,15 @@ export default function Editor() {
 
   // Upload d'un fichier vidéo → POST /api/clips/upload (multipart).
   // XHR pour la progression. Puis refresh + suit l'ingest via le poll clips.
-  const uploadFile = (file: File, queueId: string, ueberschreiben = false) => {
+  const uploadOrdnerRef = useRef<Map<string, string | null>>(new Map());   // queueId → Ziel-Ordner (für „Ersetzen“)
+  const uploadFile = (file: File, queueId: string, ueberschreiben = false, ordnerId: string | null | undefined = undefined) => {
+    const ziel = ordnerId === undefined ? (uploadOrdnerRef.current.get(queueId) ?? aktOrdner) : ordnerId;
+    uploadOrdnerRef.current.set(queueId, ziel);
     const fd = new FormData();
     fd.append("datei", file);
     fd.append("quelle", "A");
     fd.append("ueberschreiben", ueberschreiben ? "true" : "false");
+    if (ziel) fd.append("ordner_id", ziel);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `/api/clips/upload`);
     xhr.upload.onprogress = (ev) => {
@@ -828,29 +965,60 @@ export default function Editor() {
     }
   };
 
-  const handleFiles = (files: FileList | File[]) => {
+  const handleFiles = (files: FileList | File[], ordnerId: string | null = aktOrdner) => {
     const list = Array.from(files);
-    const ALLOWED = [".mp4", ".mov", ".avi", ".mkv", ".webm"];
+    const ALLOWED = [".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mxf", ".mp3", ".wav", ".m4a", ".aac", ".flac", ".aif", ".aiff", ".ogg", ".opus"];
     const valid = list.filter((f) => ALLOWED.some((ext) => f.name.toLowerCase().endsWith(ext)));
     const rejected = list.length - valid.length;
     if (rejected > 0) toast(`${rejected} Datei(en) übersprungen — nur ${ALLOWED.join(", ")} unterstützt.`, "warn", 3000);
     if (valid.length === 0) return;
     const entries = valid.map((f) => ({ id: `up-${Date.now()}-${Math.round(f.size)}-${f.name}`, name: f.name, size: f.size, progress: 0, status: "uploading" as const }));
     setUploadQueue((q) => [...q, ...entries]);
-    valid.forEach((f, i) => { uploadFilesRef.current.set(entries[i].id, f); uploadFile(f, entries[i].id); });
+    valid.forEach((f, i) => { uploadFilesRef.current.set(entries[i].id, f); uploadFile(f, entries[i].id, false, ordnerId); });
     toast(`${valid.length} Datei(en) werden hochgeladen…`, "info", 2000);
+  };
+
+  // Welches Projekt gerade geöffnet ist. Ohne diese Anzeige lässt sich nach einem
+  // Wechsel nicht erkennen, auf welchen Bestand man blickt.
+  const [projekt, setProjekt] = useState<{ name: string; datenbank: string } | null>(null);
+  useEffect(() => {
+    let abgebrochen = false;
+    fetch(`/api/projekt`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!abgebrochen && d?.name) setProjekt({ name: d.name, datenbank: d.datenbank }); })
+      .catch(() => { /* ältere Installation ohne diese Schnittstelle */ });
+    return () => { abgebrochen = true; };
+  }, []);
+
+  // Die Ansicht der Timeline gehört zum Projekt, nicht zum Browser: welche Spuren
+  // ausgeblendet sind, welche Clips gesperrt, welche Timeline zuletzt offen war —
+  // das alles verweist auf Kennungen dieses einen Bestands. Vor der Projekttrennung
+  // lag es unter einem gemeinsamen Schlüssel, und ausgeblendete Spuren aus einem
+  // Projekt blieben im nächsten unsichtbar. Deshalb trägt der Schlüssel jetzt den
+  // Namen der Datenbank. Der alte Schlüssel dient beim ersten Mal als Vorlage,
+  // damit vorhandene Einstellungen nicht verlorengehen.
+  const projektSchluessel = (basis: string) => (projekt ? `${basis}::${projekt.datenbank}` : basis);
+  const leseProjektwert = (basis: string): string | null => {
+    try {
+      if (!projekt) return null;
+      const eigen = localStorage.getItem(`${basis}::${projekt.datenbank}`);
+      return eigen ?? localStorage.getItem(basis);
+    } catch { return null; }
   };
 
   // Wave 1 + 3 : lire l'état persisté au montage (localStorage — client only,
   // donc dans un effet pour éviter tout mismatch d'hydratation SSR).
+  // Läuft erst, sobald das geöffnete Projekt bekannt ist; vorher stünde nicht fest,
+  // welcher Zustand gemeint ist.
   useEffect(() => {
+    if (!projekt) return;
     try {
       const s = localStorage.getItem("cinassist-snap-v2");
       if (s != null) setSnapEnabled(s === "1");
-      const l = localStorage.getItem("cinassist-locked");
+      const l = leseProjektwert("cinassist-locked");
       if (l) setLockedTlIds(new Set(JSON.parse(l) as string[]));
       // Multi-track : nombre de pistes + état par piste (dont hauteur par piste)
-      const tr = localStorage.getItem("cinassist-tracks");
+      const tr = leseProjektwert("cinassist-tracks");
       let nV = 1, nA = 1;
       let states = new Map<string, TrackState>();
       if (tr) {
@@ -866,12 +1034,12 @@ export default function Editor() {
         s.height = clamp(h, kind === "a" ? AUDIO_H_MIN : VIDEO_H_MIN, kind === "a" ? AUDIO_H_MAX : VIDEO_H_MAX);
         states.set(id, s);
       };
-      const h2 = localStorage.getItem("cinassist-track-heights-v2");
+      const h2 = leseProjektwert("cinassist-track-heights-v2");
       if (h2) {
         const hm = JSON.parse(h2) as Record<string, number>;
         for (const [id, h] of Object.entries(hm)) if (typeof h === "number") setH(id, h);
       } else {
-        const old = localStorage.getItem("cinassist-track-heights"); // Wave 3 group-wide {video,audio}
+        const old = leseProjektwert("cinassist-track-heights"); // Wave 3 group-wide {video,audio}
         if (old) {
           const o = JSON.parse(old) as { video?: number; audio?: number };
           if (typeof o.video === "number") for (let i = 0; i < nV; i++) setH(`v${i}`, o.video);
@@ -885,12 +1053,13 @@ export default function Editor() {
         if (isFinite(v)) setHeaderW(clamp(v, HEADER_W_MIN, HEADER_W_MAX));
       }
     } catch { /* localStorage indisponible → valeurs par défaut */ }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projekt]);
   useEffect(() => { try { localStorage.setItem("cinassist-header-w", String(headerW)); } catch {} }, [headerW]);
   useEffect(() => { try { localStorage.setItem("cinassist-snap-v2", snapEnabled ? "1" : "0"); } catch {} }, [snapEnabled]);
-  useEffect(() => { try { localStorage.setItem("cinassist-locked", JSON.stringify([...lockedTlIds])); } catch {} }, [lockedTlIds]);
-  useEffect(() => { try { const hm: Record<string, number> = {}; for (const [id, s] of trackStates) if (typeof s.height === "number") hm[id] = s.height; localStorage.setItem("cinassist-track-heights-v2", JSON.stringify(hm)); } catch {} }, [trackStates]);
-  useEffect(() => { try { localStorage.setItem("cinassist-tracks", JSON.stringify({ numVideoTracks, numAudioTracks, states: [...trackStates] })); } catch {} }, [numVideoTracks, numAudioTracks, trackStates]);
+  useEffect(() => { if (!projekt) return; try { localStorage.setItem(projektSchluessel("cinassist-locked"), JSON.stringify([...lockedTlIds])); } catch {} }, [lockedTlIds, projekt]);
+  useEffect(() => { if (!projekt) return; try { const hm: Record<string, number> = {}; for (const [id, s] of trackStates) if (typeof s.height === "number") hm[id] = s.height; localStorage.setItem(projektSchluessel("cinassist-track-heights-v2"), JSON.stringify(hm)); } catch {} }, [trackStates, projekt]);
+  useEffect(() => { if (!projekt) return; try { localStorage.setItem(projektSchluessel("cinassist-tracks"), JSON.stringify({ numVideoTracks, numAudioTracks, states: [...trackStates] })); } catch {} }, [numVideoTracks, numAudioTracks, trackStates, projekt]);
 
   // Durée minimale de la timeline (10 min) — la timeline reste utilisable et
   // ruler visible même quand vide, comme dans DaVinci. Elle s'étend
@@ -906,15 +1075,54 @@ export default function Editor() {
   // The frame-based timeline (source of truth) is derived from the seconds-based
   // edit model. `brokenTick` forces a rebuild when a defective proxy is
   // blacklisted at runtime so the engine reloads that clip's original.
+  const lastGoodEngineRef = useRef<EngineTimeline | null>(null);
   const engineTimeline = useMemo<EngineTimeline>(
-    () => ({
-      fps: PROJECT_FPS,
-      tracks: tlClipsToEngineTracks(tlClips, PROJECT_FPS, {
-        brokenProxies: brokenProxiesRef.current,
-        numVideoTracks,
-        numAudioTracks,
-      }),
-    }),
+    () => {
+      // Eine verletzte Modell-Invariante (z. B. Überlappung nach einer Bearbeitung) darf den Editor nicht töten:
+      // letzte gute Engine-Timeline behalten, Fehler sichtbar melden, der Nutzer kann mit Cmd+Z zurück.
+      try {
+        const tl: EngineTimeline = {
+          fps: PROJECT_FPS,
+          tracks: tlClipsToEngineTracks(tlClips, PROJECT_FPS, {
+            brokenProxies: brokenProxiesRef.current,
+            numVideoTracks,
+            numAudioTracks,
+          }),
+        };
+        lastGoodEngineRef.current = tl;
+        return tl;
+      } catch (err) {
+        // Diagnose: die erste überlappende Paarung in SEKUNDEN je Video-Index mitloggen —
+        // ohne das ist aus der normalize()-Meldung (Frames, engine-Track-Ids) nicht
+        // rekonstruierbar, welcher Edit/Ladezustand die Invariante verletzt hat.
+        try {
+          const proVIdx = new Map<number, typeof tlClips>();
+          for (const c of tlClips) {
+            if (c.audioOnly) continue;
+            const k = Math.max(0, Math.min(numVideoTracks - 1, Math.floor(c.videoTrackIndex ?? 0)));
+            if (!proVIdx.has(k)) proVIdx.set(k, []);
+            proVIdx.get(k)!.push(c);
+          }
+          for (const [k, reihe] of proVIdx) {
+            const sortiert = [...reihe].sort((a, b) => a.start - b.start);
+            for (let i = 1; i < sortiert.length; i++) {
+              const p = sortiert[i - 1], c = sortiert[i];
+              const ov = p.start + p.duration - c.start;
+              if (ov > 1e-9) {
+                console.error("Timeline-Diagnose: Überlappung", {
+                  vIdx: k, numVideoTracks, ueberlappS: ov,
+                  prev: { tlId: p.tlId, name: p.name, start: p.start, duration: p.duration, spurRoh: p.videoTrackIndex },
+                  cur: { tlId: c.tlId, name: c.name, start: c.start, spurRoh: c.videoTrackIndex },
+                });
+              }
+            }
+          }
+        } catch { /* Diagnose darf nie selbst werfen */ }
+        console.error("Timeline-Modell ungültig [g2]:", err, { anzahlClips: tlClips.length, numVideoTracks, numAudioTracks });
+        setTimeout(() => toast(`Timeline-Modell ungültig (${(err as Error).message.slice(0, 90)}…) — Cmd+Z macht die letzte Bearbeitung rückgängig.`, "err", 7000), 0);
+        return lastGoodEngineRef.current ?? { fps: PROJECT_FPS, tracks: [] };
+      }
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [tlClips, brokenTick, numVideoTracks, numAudioTracks],
   );
@@ -1352,6 +1560,135 @@ export default function Editor() {
   // UN seul undo step (posé par executeBatch au début). Utilisé par l'agent IA
   // et par tout consommateur du TimelineCommandExecutor.
   const batchModeRef = useRef(false);
+  /** Schnittplan aus einer JSON-Datei laden und in die Timeline übernehmen.
+   *
+   *  Die abgelegten Pläne führen bewusst keine Vorschau-Adressen mit, weil diese an die
+   *  laufende Installation gebunden sind. Der zugehörige Clip wird deshalb beim Laden neu
+   *  aufgelöst, zuerst über die Kennung, ersatzweise über den Dateinamen. Dadurch lässt sich
+   *  ein Plan auch dann öffnen, wenn die Clips unter anderen Kennungen eingelesen wurden.
+   *  Einträge ohne auffindbaren Clip werden gezählt und gemeldet, nicht stillschweigend übergangen. */
+  const ladeSchnittplanAusDatei = async (datei: File) => {
+    let roh: unknown;
+    try {
+      roh = JSON.parse(await datei.text());
+    } catch {
+      toast("Die Datei ist kein lesbares JSON.", "err", 5000);
+      return;
+    }
+    const plan = roh as SchnittplanDTO;
+    if (!plan || !Array.isArray(plan.eintraege) || plan.eintraege.length === 0) {
+      toast("Kein Schnittplan erkannt. Erwartet wird eine Datei mit einem Feld „eintraege“.", "err", 6000);
+      return;
+    }
+    let vorrat: ClipDTO[] = clips;
+    if (vorrat.length === 0) {
+      try {
+        const r = await fetch(`/api/clips`);
+        if (r.ok) vorrat = (await r.json()) as ClipDTO[];
+      } catch { /* offline: bleibt beim vorhandenen Bestand */ }
+    }
+    const nachId = new Map(vorrat.map((c) => [c.id, c]));
+    const nachName = new Map(vorrat.map((c) => [c.dateiname, c]));
+    let fehlend = 0;
+    const eintraege = plan.eintraege.map((e) => {
+      const c = nachId.get(e.clip_id) ?? (e.dateiname ? nachName.get(e.dateiname) : undefined);
+      if (!c) { fehlend += 1; return e; }
+      return { ...e, clip_id: c.id, clip: {
+        id: c.id, dateiname: c.dateiname, dauer: c.dauer,
+        video_url: c.video_url, proxy_url: c.proxy_url,
+        waveform_url: c.waveform_url, strip_url: c.strip_url,
+        medientyp: c.medientyp, medienart: c.medienart,
+      } };
+    });
+    const gefunden = plan.eintraege.length - fehlend;
+    if (gefunden === 0) {
+      toast("Kein Eintrag konnte einem Clip zugeordnet werden. Sind die Clips dieser Installation eingelesen?", "err", 8000);
+      return;
+    }
+    ladeSchnittplan({ ...plan, eintraege }, "ersetzen");
+    setTab("cut");
+    if (fehlend > 0) {
+      toast(`${gefunden} von ${plan.eintraege.length} Einträgen geladen. ${fehlend} ohne auffindbaren Clip.`, "warn", 8000);
+    } else {
+      toast(`${plan.name || "Schnittplan"}: alle ${gefunden} Einträge geladen.`, "ok", 5000);
+    }
+  };
+
+  /** Rohschnitt (Schnittplan) → Timeline: Segmente in Skript-Reihenfolge auf V1/A1, In/Out aus dem Plan,
+   *  Sync-Ton über die Medienart des Clips (wie Drag&Drop), Name = Szene/Einstellung/Take. */
+  const ladeSchnittplan = (plan: SchnittplanDTO, modus: "ersetzen" | "anhaengen") => {
+    const now = Date.now();
+    let cursor = modus === "anhaengen" ? tlClips.reduce((m, c) => Math.max(m, c.start + c.duration), 0) : 0;
+    const neu: TLClip[] = [];
+    const basis = cursor;
+    for (const e of plan.eintraege) {
+      const c = e.clip;
+      if (!c) continue;
+      const dur = Math.max(0.1, e.out_s - e.in_s);
+      const start = e.tl_start != null ? basis + e.tl_start : cursor;
+      const spurIdx = Math.max(0, Math.min(MAX_TRACKS - 1, (e.spur ?? 1) - 1));
+      const felder = medienSegmentFelder(c, spurIdx);
+      const seg: TLClip = {
+        tlId: `${e.clip_id}-plan-${now}-${e.nr}`,
+        clipId: e.clip_id,
+        name: `Sz${e.szene} ${e.einstellung ?? ""} T${e.take ?? "?"}${e.art === "alternative" ? " · Alternative" : e.video_only ? " · Cutaway" : e.audio_only ? " · Ton-Brücke" : ""}`,
+        start,
+        duration: dur,
+        mediaStart: e.in_s,
+        sourceDuration: c.dauer ?? dur,
+        stripUrl: abs(c.strip_url),
+        waveformUrl: abs(c.waveform_url),
+        proxyUrl: abs(c.proxy_url || c.video_url),
+        videoUrl: abs(c.video_url),
+        videoTrackIndex: spurIdx,
+        audioTrackIndex: spurIdx,
+        ...felder,
+        ...(e.fade_in ? { fadeIn: e.fade_in } : {}),
+        ...(e.fade_out ? { fadeOut: e.fade_out } : {}),
+      };
+      if (e.video_only) { seg.hasAudio = false; seg.audioOnly = false; }
+      if (e.art === "alternative") seg.istAlternative = true;
+      if (e.audio_only) { seg.audioOnly = true; seg.hasAudio = true; seg.stripUrl = null; seg.videoTrackIndex = -1; seg.audioTrackIndex = 0; }
+      neu.push(seg);
+      setNumVideoTracks((prev) => Math.max(prev, Math.min(MAX_TRACKS, spurIdx + 1)));
+      if (!e.audio_only && spurIdx === 0) cursor = start + dur;
+    }
+    if (!neu.length) { toast("Der Rohschnitt enthält keine ladbaren Segmente.", "warn"); return; }
+    snapshot();
+    const gesamt = modus === "ersetzen" ? neu : [...tlClips, ...neu];
+    setTlClips(gesamt);
+    versteckeAlternativSpuren(neu);
+    if (modus === "ersetzen") setProjectName(plan.name);
+    toast(`Rohschnitt geladen: ${neu.length} Segmente (${Math.round(cursor)} s).`, "ok", 3500);
+    // Sofort persistieren — ein Reload der Seite zeigt sonst eine leere Timeline.
+    void saveClipsAs(modus === "ersetzen" ? plan.name : (projectName || plan.name), gesamt, "rohschnitt").catch(() => {});
+  };
+
+
+  /** Alternativen-Spuren (V2+, ausschließlich stumme Overlays) nach einem Timeline-Load standardmäßig AUSBLENDEN:
+   *  der Master spielt normal; zum Auditionieren blendet der Nutzer die Spur per Auge ein — der Ton läuft dann
+   *  dank Audio-Fallthrough weiter vom Master. (Nutzer-Befund 20.08.: sichtbarer Stapel kaperte Bild UND Ton.) */
+  const versteckeAlternativSpuren = (clipsNeu: TLClip[]) => {
+    const altLanes = new Set<number>();
+    const overlayLanes = new Set<number>();
+    for (const c of clipsNeu) {
+      const l = c.videoTrackIndex ?? 0;
+      if (l <= 0) continue;
+      if (c.istAlternative) altLanes.add(l);
+      else overlayLanes.add(l);
+    }
+    for (const l of overlayLanes) altLanes.delete(l);   // gemischte Lane = Schnitt-Inhalt → sichtbar
+    if (!altLanes.size && !overlayLanes.size) return;
+    setTrackStates((prev) => {
+      const n = new Map(prev);
+      for (const l of altLanes) n.set(`v${l}`, { ...(n.get(`v${l}`) ?? DEFAULT_TRACK_STATE), hidden: true });
+      // Overlay-Spuren (Cutaways/Reaktionen = Teil des Schnitts) EXPLIZIT einblenden — sonst bleibt ein alter
+      // „hidden“-Zustand aus einer früheren Sitzung kleben und der Feinschnitt verliert seine Cutaways.
+      for (const l of overlayLanes) n.set(`v${l}`, { ...(n.get(`v${l}`) ?? DEFAULT_TRACK_STATE), hidden: false });
+      return n;
+    });
+  };
+
   const snapshot = () => {
     if (batchModeRef.current) return;
     historyRef.current.push(tlClips);
@@ -1386,22 +1723,53 @@ export default function Editor() {
   // forced sequential tiling is gone — it fought positional drops and re-flowed
   // the whole timeline on every edit. `reflow` is now a pass-through so existing
   // callers (delete/trim/move) keep clip starts intact instead of re-tiling.
-  const reflow = (arr: TLClip[]): TLClip[] => arr;
+  // reflow: KEINE automatische Auflösung echter Überlappungen (bewusste Modell-Invariante) — aber Rundungs-
+  // Überlappungen unterhalb einer Frame (Float-Summen nach Ripple/Trim: 44.6000001 vs 44.6) werden angeklebt,
+  // sonst wirft `normalize()` beim Rendern ("overlaps are never auto-resolved") und der Editor steht.
+  const reflow = (arr: TLClip[]): TLClip[] => {
+    const EPS = 1 / 24 + 1e-6;
+    const out = arr.map((c) => ({ ...c }));
+    const gruppen = new Map<string, TLClip[]>();
+    for (const c of out) {
+      if (!c.audioOnly) { const k = `v${c.videoTrackIndex ?? 0}`; (gruppen.get(k) ?? gruppen.set(k, []).get(k)!).push(c); }
+      if (c.hasAudio || c.audioOnly) { const k = `a${c.audioTrackIndex ?? c.videoTrackIndex ?? 0}`; (gruppen.get(k) ?? gruppen.set(k, []).get(k)!).push(c); }
+    }
+    for (const lst of gruppen.values()) {
+      lst.sort((a, b) => a.start - b.start);
+      for (let i = 1; i < lst.length; i++) {
+        const prev = lst[i - 1], cur = lst[i];
+        const prevEnd = prev.start + prev.duration;
+        if (cur.start < prevEnd && prevEnd - cur.start <= EPS) cur.start = prevEnd;
+      }
+    }
+    return out;
+  };
 
   // Append NEW clips at the tail of their own video track, preserving every
   // existing clip's position. Guarantees no same-track overlap (normalize would
   // THROW otherwise) for flows that have no drop position: double-click / import
   // / paste / duplicate.
   const appendTails = (existing: TLClip[], incoming: TLClip[]): TLClip[] => {
+    // Video-Clips: ans Ende ihrer V-Spur. Audio-only-Clips: ans Ende ihrer A-Spur (dort liegt
+    // auch der Ton der Video-Clips) — sonst Überlappung auf a0 → Modell-Invariante schlägt an.
     const tail: Record<number, number> = {};
+    const tailA: Record<number, number> = {};
     for (const c of existing) {
-      const ti = c.videoTrackIndex ?? 0;
-      tail[ti] = Math.max(tail[ti] ?? 0, c.start + c.duration);
+      if (!c.audioOnly) { const ti = c.videoTrackIndex ?? 0; tail[ti] = Math.max(tail[ti] ?? 0, c.start + c.duration); }
+      if (c.hasAudio) { const ai = c.audioTrackIndex ?? c.videoTrackIndex ?? 0; tailA[ai] = Math.max(tailA[ai] ?? 0, c.start + c.duration); }
     }
     const placed = incoming.map((c) => {
-      const ti = c.videoTrackIndex ?? 0;
-      const start = tail[ti] ?? 0;
-      tail[ti] = start + c.duration;
+      let start: number;
+      if (c.audioOnly) {
+        const ai = c.audioTrackIndex ?? 0;
+        start = tailA[ai] ?? 0;
+        tailA[ai] = start + c.duration;
+      } else {
+        const ti = c.videoTrackIndex ?? 0;
+        start = tail[ti] ?? 0;
+        tail[ti] = start + c.duration;
+        if (c.hasAudio) { const ai = c.audioTrackIndex ?? ti; tailA[ai] = Math.max(tailA[ai] ?? 0, start + c.duration); }
+      }
       return { ...c, start };
     });
     return [...existing, ...placed];
@@ -1603,6 +1971,11 @@ export default function Editor() {
     } else if (opts.media) {
       const src = clips.find((c) => c.id === opts.media);
       if (!src) return;
+      if (src.medientyp === "audio") {
+        // Reine Audiodatei: keine Bildhälfte → Platzierung/Kollision auf der A-Spur (dropMediaBatch).
+        dropMediaBatch([src.id], intendedVideoTrack, dropTime);
+        return;
+      }
       const dur = src.dauer || 0;
       duration = dur;
       hasAudio = !!src.waveform_url;
@@ -1983,7 +2356,9 @@ export default function Editor() {
     if (d.siblingEl) d.siblingEl.style.transform = `translateX(${dxPx}px)`;
     // Multi-clip drag : applique la même translation à tous les clips sélectionnés
     // (sauf celui déjà dragué). Le rendu suit visuellement l'ensemble du groupe.
-    if (d.kind === "v" && selectedTlIds.has(d.tlId) && selectedTlIds.size > 1) {
+    if (d.kind === "v" && d.startTrackIdx === 0 && selectedTlIds.has(d.tlId) && selectedTlIds.size > 1) {
+      // Gruppen-Drag NUR von V1 aus — Overlay-Clips (V2+) bewegen sich immer SOLO
+      // (Nutzer-Regel: Coverage verschieben darf nie andere Clips mitziehen).
       selectedTlIds.forEach((tlId) => {
         if (tlId === d.tlId) return;
         document.querySelectorAll(`[data-avtlid="${tlId}"]`).forEach((node) => {
@@ -2069,19 +2444,35 @@ export default function Editor() {
     // multiple, on applique le même delta (temps + piste) à tous les clips
     // sélectionnés. Vérifie les collisions AVANT commit — si le groupe overlappe
     // un clip externe, on rollback et affiche un toast.
-    if (d.kind === "v" && selectedTlIds.has(d.tlId) && selectedTlIds.size > 1) {
-      const deltaTime = d.lastT - d.startClipStart;
-      const deltaTrack = d.hoverTrack - d.startTrackIdx;
+    if (d.kind === "v" && d.startTrackIdx === 0 && selectedTlIds.has(d.tlId) && selectedTlIds.size > 1) {
       const groupClips = tlClips.filter((c) => selectedTlIds.has(c.tlId));
+      // Delta UNIFORM für die ganze Gruppe: der Zeit-Versatz wird so geklemmt, dass KEIN Clip
+      // unter t=0 rutscht — per-Clip-Clamping komprimierte die Gruppe relativ zueinander
+      // (Befund: Sz2-Master stoppte bei 0, Sz3-Master schob sich darüber → v0-Überlappung).
+      const minStart = Math.min(...groupClips.map((c) => c.start));
+      const deltaTime = Math.max(d.lastT - d.startClipStart, -minStart);
+      const deltaTrack = d.hoverTrack - d.startTrackIdx;
       // Calcule les nouvelles positions du groupe
       const newPositions = groupClips.map((c) => ({
         tlId: c.tlId,
-        newStart: Math.max(0, c.start + deltaTime),
+        newStart: c.start + deltaTime,
         newVTrack: Math.max(0, Math.min(MAX_TRACKS - 1, (c.videoTrackIndex ?? 0) + deltaTrack)),
         duration: c.duration,
         hasAudio: c.hasAudio,
         audioTrackIndex: c.audioTrackIndex,
       }));
+      // Kollisionen INNERHALB der Gruppe (Spur-Clamp kann zwei Clips auf dieselbe Spur drücken)
+      const EPS_G = 0.034;
+      for (let i = 0; i < newPositions.length; i++) {
+        for (let j = i + 1; j < newPositions.length; j++) {
+          const a = newPositions[i], b = newPositions[j];
+          if (a.newVTrack === b.newVTrack
+              && a.newStart + EPS_G < b.newStart + b.duration && b.newStart + EPS_G < a.newStart + a.duration) {
+            toast("Kollision innerhalb der Gruppe — Verschiebung abgebrochen.", "warn", 3000);
+            return;
+          }
+        }
+      }
       // Vérifie collisions vs clips EXTERNES (pas dans le groupe)
       const EPS = 0.034;
       const externals = tlClips.filter((c) => !selectedTlIds.has(c.tlId));
@@ -2486,6 +2877,7 @@ export default function Editor() {
     const pxPerSec = rowRect.width / total;
     const startClientX = e.clientX;
     const orig = { ...clip };
+    const origAll = new Map(tlClips.map((c) => [c.tlId, { start: c.start }]));   // Ausgangspositionen für Ripple
     snapshot(); // un seul undo-step pour tout le drag
 
     // Snap candidates : playhead, markers, autres clips (start & end), t=0.
@@ -2544,12 +2936,20 @@ export default function Editor() {
           guide.style.display = "none";
         }
       }
-      // Trim LEFT : `start` bouge aussi → c'est le début du clip qui se déplace,
-      // pas la fin. Trim RIGHT : `start` reste, seul `duration` change (la fin
-      // bouge). Comportement DaVinci/Premiere standard.
-      const start = side === "left" ? orig.start + d : orig.start;
-      const mediaStart = side === "left" ? orig.mediaStart + d : orig.mediaStart;
+      // Ripple-Trim (Standard): der Clip wird länger/kürzer, ALLES danach rückt mit — kein Clip ändert seine Länge, es
+      // entsteht weder Loch noch Überlappung (bord-à-bord generierte Schnitte bleiben bearbeitbar). Alt = klassischer
+      // Trim (Start des Clips wandert, Nachbarn bleiben; kann Loch/Überlappung erzeugen).
+      const ripple = !ev.altKey;
       const duration = side === "left" ? orig.duration - d : orig.duration + d;
+      let start: number;
+      let mediaStart: number;
+      if (side === "left") {
+        mediaStart = orig.mediaStart + d;
+        start = ripple ? orig.start : orig.start + d;      // Ripple: der Kopf bleibt an Ort und Stelle, Inhalt rutscht
+      } else {
+        mediaStart = orig.mediaStart;
+        start = orig.start;
+      }
       // Si le clip est linked A/V, l'audioStart suit le start (l'audio reste
       // aligné). Si unlinked, on ne touche pas à audioStart (audio indépendant).
       const audioStartPatch = side === "left"
@@ -2558,8 +2958,21 @@ export default function Editor() {
             : { audioStart: start })
         : {};
       lastDuration = duration;
-      setTlClips((cur) => reflow(cur.map((c) => (c.tlId === tlId ? { ...c, start, mediaStart, duration, ...audioStartPatch } : c))));
-      setTrimHud({ x: ev.clientX, y: ev.clientY, delta: duration - orig.duration, newDuration: duration });
+      // Ripple: alles, was (im Original) auf oder nach dem ALTEN Clip-Ende beginnt, um die Längenänderung verschieben —
+      // auf allen Spuren (Bild, Ton, Ton-Brücken), damit Sync und Reihenfolge erhalten bleiben.
+      const shift = ripple ? duration - orig.duration : 0;
+      const altesEnde = orig.start + orig.duration;
+      setTlClips((cur) => reflow(cur.map((c) => {
+        if (c.tlId === tlId) return { ...c, start, mediaStart, duration, ...audioStartPatch };
+        if (shift !== 0) {
+          const o = origAll.get(c.tlId);
+          if (o && Math.abs(o.start - altesEnde) <= 0.001) return { ...c, start: start + duration };   // bündiger Nachbar: exakt ans neue Ende
+          if (o && o.start >= altesEnde - 0.001) return { ...c, start: Math.max(0, o.start + shift) };
+          if (o) return { ...c, start: o.start };
+        }
+        return c;
+      })));
+      setTrimHud({ x: ev.clientX, y: ev.clientY, delta: duration - orig.duration, newDuration: duration, label: ripple ? "Ripple-Trim (Alt = ohne Verschieben)" : "Trim ohne Verschieben" });
     };
     const onUp = () => {
       window.removeEventListener("mousemove", onMove);
@@ -2799,6 +3212,7 @@ export default function Editor() {
     snapshot();
     setTlClips((cur) => {
       const dur = src.dauer || 0;
+      const nurAudio = src.medientyp === "audio";
       const seg: TLClip = {
         tlId: `${clipId}-${Date.now()}`,
         clipId,
@@ -2807,13 +3221,14 @@ export default function Editor() {
         duration: dur,
         mediaStart: 0,
         sourceDuration: dur,
-        stripUrl: abs(src.strip_url),
+        ...(nurAudio ? { audioOnly: true } : {}),
+        stripUrl: nurAudio ? null : abs(src.strip_url),
         waveformUrl: abs(src.waveform_url),
         proxyUrl: abs(src.proxy_url || src.video_url),
         videoUrl: abs(src.video_url),
-        hasAudio: !!src.waveform_url,
         videoTrackIndex,
         audioTrackIndex: videoTrackIndex,
+        ...medienSegmentFelder(src, videoTrackIndex),
       };
       return appendTails(cur, [seg]);
     });
@@ -2853,9 +3268,9 @@ export default function Editor() {
       waveformUrl: abs(src.waveform_url),
       proxyUrl: abs(src.proxy_url || src.video_url),
       videoUrl: abs(src.video_url),
-      hasAudio: !!src.waveform_url,
       videoTrackIndex: vIdx,
       audioTrackIndex: vIdx,
+      ...medienSegmentFelder(src, vIdx),
     };
     snapshot();
     setTlClips((cur) => [...cur, seg]);
@@ -2868,6 +3283,13 @@ export default function Editor() {
   // fallback : dropTime tel quel, décalé au tail en cas de collision.
   const dropMediaBatch = (mediaIds: string[], intendedVideoTrack: number, dropTime: number) => {
     if (mediaIds.length === 0) return;
+    // Clips ohne bekannte Dauer (Analyse noch nicht gestartet) ergäben 0-s-Segmente → unsichtbar.
+    const ohneDauer = mediaIds.map((id) => clips.find((c) => c.id === id)).filter((c) => c && !(c.dauer && c.dauer > 0));
+    if (ohneDauer.length) {
+      toast(`${ohneDauer.length === 1 ? "Der Clip wird" : `${ohneDauer.length} Clips werden`} noch vorbereitet (Dauer unbekannt) — bitte kurz warten.`, "warn", 2500);
+      mediaIds = mediaIds.filter((id) => !ohneDauer.some((c) => c && c.id === id));
+      if (mediaIds.length === 0) return;
+    }
     const srcs = mediaIds.map((id) => clips.find((c) => c.id === id)).filter(Boolean) as typeof clips;
     if (srcs.length === 0) return;
     const resolved = mediaDropResolvedRef.current;
@@ -2879,8 +3301,13 @@ export default function Editor() {
     // Position de départ : preview snap si dispo, sinon dropTime + fallback collision.
     let cursor = resolved ? Math.max(0, resolved.startTime) : Math.max(0, dropTime);
     const totalDur = srcs.reduce((s, c) => s + (c.dauer || 0), 0);
-    if (!resolved) {
-      const rowClips = tlClips.filter((c) => (c.videoTrackIndex ?? 0) === vIdx);
+    const nurAudioBatch = srcs.every((c) => c.medientyp === "audio");
+    if (!resolved || nurAudioBatch) {
+      // Audio-only-Clips kollidieren auf der A-Spur (Ton der Video-Clips + andere Audio-Clips),
+      // Video-Clips auf der V-Spur.
+      const rowClips = nurAudioBatch
+        ? tlClips.filter((c) => c.hasAudio && (c.audioTrackIndex ?? c.videoTrackIndex ?? 0) === vIdx)
+        : tlClips.filter((c) => (c.videoTrackIndex ?? 0) === vIdx);
       const rangeCollides = rowClips.some((c) => cursor + totalDur > c.start && c.start + c.duration > cursor);
       if (rangeCollides) {
         cursor = rowClips.reduce((max, c) => Math.max(max, c.start + c.duration), 0);
@@ -2903,9 +3330,9 @@ export default function Editor() {
         waveformUrl: abs(src.waveform_url),
         proxyUrl: abs(src.proxy_url || src.video_url),
         videoUrl: abs(src.video_url),
-        hasAudio: !!src.waveform_url,
         videoTrackIndex: vIdx,
         audioTrackIndex: vIdx,
+        ...medienSegmentFelder(src, vIdx),
       };
       cursor += dur;
       return seg;
@@ -2948,7 +3375,8 @@ export default function Editor() {
     const textPct = Math.round((r.text_score ?? 0) * 100);
     const hasClip = clipPct >= 15;
     const hasText = textPct >= 15;
-    const matchKind = hasClip && hasText ? "V+T" : hasText ? "T" : "V";
+    const matchKind = r.treffer_art === "dialog" ? "Dialog" : r.treffer_art === "beides" ? "Dialog+V" : hasClip && hasText ? "V+T" : hasText ? "T" : "V";
+    const sprungZeit = r.treffer_zeit ?? r.start_zeit;   // Klick springt genau zum gesagten Wort
     const matchTitle = `Visuell (CLIP): ${clipPct}%\nText (BM25): ${textPct}%\nGesamt: ${simPct}%`;
     const fmtT = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
     return (
@@ -2967,9 +3395,9 @@ export default function Editor() {
         onClick={() => {
           const tl = tlClips.find((c) => c.name === r.clip_name.replace(/\.[^/.]+$/, ""));
           if (tl) {
-            seekSeconds(tl.start + Math.max(0, r.start_zeit - tl.mediaStart));
+            seekSeconds(tl.start + Math.max(0, sprungZeit - tl.mediaStart));
             setSelectedTlIds(new Set([tl.tlId]));
-            toast(`Sprung zu Szene ${r.szenen_nr} in ${r.clip_name}.`, "ok", 1600);
+            toast(r.treffer_zeit != null ? `Sprung zu „${r.treffer_wort ?? search}“ (${fmtT(sprungZeit)}) in ${r.clip_name}.` : `Sprung zu Szene ${r.szenen_nr} in ${r.clip_name}.`, "ok", 1600);
           } else if (src) {
             appendClip(src.id);
             toast(`${r.clip_name} zur Timeline hinzugefügt.`, "ok", 1600);
@@ -3032,7 +3460,14 @@ export default function Editor() {
               {r.beschreibung}
             </div>
           )}
-          {r.transkription && (
+          {r.treffer_snippet ? (
+            <div style={{ fontSize: 10, color: "#7fd4c4", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }} title={r.treffer_zeiten?.length ? `Gesagt bei: ${r.treffer_zeiten.map(fmtT).join(", ")}` : undefined}>
+              <span style={{ fontFamily: "ui-monospace, monospace", color: "#e5c100", fontWeight: 700 }}>{fmtT(sprungZeit)}</span>
+              {r.treffer_konfidenz != null && r.treffer_konfidenz < 0.5 && <span title={`Whisper ist sich bei diesem Wort unsicher (${Math.round(r.treffer_konfidenz * 100)} %)`} style={{ color: "#e0b84a", marginLeft: 4 }}>?</span>}
+              {r.treffer_zeiten && r.treffer_zeiten.length > 1 && <span style={{ color: "#8a8a8a" }}> +{r.treffer_zeiten.length - 1}×</span>}
+              {" "}<span style={{ fontStyle: "italic" }}>«{r.treffer_snippet}»</span>
+            </div>
+          ) : r.transkription && (
             <div style={{ fontSize: 10, color: "#7fd4c4", fontStyle: "italic", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
               «{r.transkription}»
             </div>
@@ -3042,9 +3477,36 @@ export default function Editor() {
     );
   };
 
-  const loadTimeline = async (timelineId: string) => {
+  // Zuletzt gespeicherte/geladene Timeline beim Start wiederherstellen (einmalig, nur wenn die Timeline leer ist).
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current || clips.length === 0 || tlClips.length > 0) return;
+    let id: string | null = null;
+    try { id = leseProjektwert("cinassist-last-timeline-id"); } catch { /* ignore */ }
+    restoredRef.current = true;
+    // Regel: der NEUESTE Rohschnitt (vom Generator oder „In Timeline laden“) gewinnt gegen den lokalen Verweis, wenn er
+    // jünger ist — „regeneriere mir eine Timeline“ soll nach dem Reload sichtbar sein. Sonst: zuletzt geladene Timeline.
+    fetch(`${API}/api/timelines`).then((r) => (r.ok ? r.json() : [])).then((list: TimelineDTO[]) => {
+      const roh = (list || []).filter((t) => t.stil === "rohschnitt")
+        .sort((a, b) => String(b.erstellt_am ?? "").localeCompare(String(a.erstellt_am ?? "")))[0];
+      const lokal = id ? (list || []).find((t) => t.id === id) : undefined;
+      const ziel = roh && (!lokal || String(roh.erstellt_am ?? "") > String(lokal.erstellt_am ?? "")) ? roh.id : (lokal?.id ?? id);
+      if (ziel) void loadTimeline(ziel, true);
+    }).catch(() => { if (id) void loadTimeline(id, true); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clips.length]);
+
+  const loadTimeline = async (timelineId: string, leise = false) => {
     try {
       const r = await fetch(`${API}/api/timelines/${timelineId}`);
+      if (r.status === 404) {
+        // Die zuletzt geöffnete Timeline gibt es nicht mehr. Das passiert regelmäßig
+        // beim Wechsel in ein anderes Projekt oder nachdem ein Projekt geleert wurde:
+        // die Kennung im Browserspeicher zeigt dann ins Leere. Sie wird verworfen,
+        // statt bei jedem Laden einen Fehler zu werfen.
+        try { localStorage.removeItem(projektSchluessel("cinassist-last-timeline-id")); localStorage.removeItem("cinassist-last-timeline-id"); } catch { /* ohne Speicher weiter */ }
+        return;
+      }
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const t = await r.json();
       const segs = t?.daten?.segmente || [];
@@ -3062,11 +3524,13 @@ export default function Editor() {
         const dur = Number(seg.dauer ?? seg.duration ?? 0);
         const mediaStart = Number(seg.media_start ?? seg.mediaStart ?? 0);
         if (dur <= 0) continue;
-        loaded.push({
+        const start = typeof seg.start === "number" ? Number(seg.start) : cursor;
+        const trackIdx = Math.max(0, Math.min(MAX_TRACKS - 1, (parseInt(String(seg.track ?? "v1").replace(/^v/, ""), 10) || 1) - 1));
+        const tl: TLClip = {
           tlId: String(seg.id ?? `${clipId}-${Date.now()}-${cursor}`),
           clipId,
           name: String(seg.label ?? src?.dateiname?.replace(/\.[^/.]+$/, "") ?? "Clip"),
-          start: cursor,
+          start,
           duration: dur,
           mediaStart,
           sourceDuration: Number(seg.source_duration ?? src?.dauer ?? dur),
@@ -3074,11 +3538,44 @@ export default function Editor() {
           waveformUrl: abs(src?.waveform_url),
           proxyUrl: abs(src?.proxy_url || src?.video_url),
           videoUrl: abs(src?.video_url),
-          hasAudio: !!src?.waveform_url,
-        });
-        cursor += dur;
+          videoTrackIndex: trackIdx,
+          audioTrackIndex: trackIdx,
+          ...medienSegmentFelder(src, trackIdx),
+          ...(seg.fade_in ? { fadeIn: Number(seg.fade_in) } : {}),
+          ...(seg.fade_out ? { fadeOut: Number(seg.fade_out) } : {}),
+        };
+        if (seg.video_only) { tl.hasAudio = false; tl.audioOnly = false; }
+        if (seg.alternative) tl.istAlternative = true;
+        if (seg.audio_only) { tl.audioOnly = true; tl.hasAudio = true; tl.stripUrl = null; tl.videoTrackIndex = -1; tl.audioTrackIndex = 0; }
+        loaded.push(tl);
+        setNumVideoTracks((prev) => Math.max(prev, Math.min(MAX_TRACKS, trackIdx + 1)));
+        if (!seg.audio_only && trackIdx === 0) cursor = start + dur;
       }
+      // Selbstheilung: enthält eine GESPEICHERTE Timeline echte Überlappungen (z. B. aus einer
+      // Bearbeitung vor einem Editor-Fix), werden spätere Clips je Spur nach rechts geschoben —
+      // sonst wirft die Engine bei JEDER Folge-Bearbeitung denselben Invarianten-Toast und spielt
+      // den alten Stand. Ein Hinweis, keine stille Korrektur.
+      let repariert = 0;
+      const proSpur = new Map<number, TLClip[]>();
+      for (const cl of loaded) {
+        if (cl.audioOnly) continue;
+        const k = cl.videoTrackIndex ?? 0;
+        if (!proSpur.has(k)) proSpur.set(k, []);
+        proSpur.get(k)!.push(cl);
+      }
+      for (const reihe of proSpur.values()) {
+        reihe.sort((a, b) => a.start - b.start);
+        for (let i = 1; i < reihe.length; i++) {
+          const prevEnd = reihe[i - 1].start + reihe[i - 1].duration;
+          if (reihe[i].start < prevEnd - 1 / PROJECT_FPS) {
+            reihe[i].start = Math.round(prevEnd * PROJECT_FPS) / PROJECT_FPS;
+            repariert++;
+          }
+        }
+      }
+      if (repariert > 0) toast(`${repariert} überlappende(r) Clip(s) beim Laden repariert (nach rechts verschoben).`, "warn", 5000);
       setTlClips(loaded);
+      versteckeAlternativSpuren(loaded);
       setSelectedTlIds(new Set());
       seekSeconds(0);
       pause();
@@ -3086,40 +3583,58 @@ export default function Editor() {
       setHistOpen(false);
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 1500);
-      toast(`Timeline "${t.name}" geladen (${loaded.length} Clips).`, "ok");
+      try { localStorage.setItem(projektSchluessel("cinassist-last-timeline-id"), String(timelineId)); } catch { /* ignore */ }
+      toast(leise ? `Timeline „${t.name}“ wiederhergestellt (${loaded.length} Clips).` : `Timeline "${t.name}" geladen (${loaded.length} Clips).`, "ok");
     } catch (e) {
       console.warn(e);
+      if (leise) return;
       setSaveStatus("error");
       setTimeout(() => setSaveStatus("idle"), 3000);
       toast(`Laden fehlgeschlagen: ${(e as Error).message}`, "err", 5000);
     }
   };
 
+  /** Persistiert eine Clip-Liste als Timeline (Server) und merkt sie als „zuletzt“ — wird beim nächsten Laden der
+   *  Seite automatisch wiederhergestellt (sonst ist die Timeline nach einem Reload leer). */
+  const saveClipsAs = async (name: string, list: TLClip[], stil = "manuell"): Promise<TimelineDTO> => {
+    const total = list.reduce((s, c) => s + c.duration, 0);
+    const r = await fetch(`${API}/api/timelines`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name || "Unbenannt",
+        stil,
+        daten: {
+          segmente: list.map((c) => ({
+            id: c.tlId, clip_id: c.clipId, label: c.name,
+            // Die Spur muss mitgespeichert werden. Sie stand hier fest auf „v1“, wodurch
+            // jedes Speichern die Verteilung einebnete: Master, Überlagerungen und
+            // Alternativen landeten allesamt auf V1 und waren nicht wiederherstellbar.
+            // Das Laden liest die Angabe seit jeher richtig aus.
+            track: c.audioOnly ? `a${(c.audioTrackIndex ?? 0) + 1}` : `v${(c.videoTrackIndex ?? 0) + 1}`,
+            start: c.start, dauer: c.duration, quelle: "A",
+            media_start: c.mediaStart,
+            source_duration: c.sourceDuration,
+            video_only: c.hasAudio === false && !c.audioOnly ? true : undefined,
+            audio_only: c.audioOnly ? true : undefined,
+            fade_in: c.fadeIn || undefined, fade_out: c.fadeOut || undefined,
+          })),
+          gesamtdauer: total,
+        },
+      }),
+    });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const saved: TimelineDTO = await r.json();
+    setTimelines((cur) => [saved, ...cur]);
+    try { localStorage.setItem(projektSchluessel("cinassist-last-timeline-id"), String(saved.id)); } catch { /* ignore */ }
+    return saved;
+  };
+
   const saveNow = async () => {
     if (tlClips.length === 0) return;
     setSaveStatus("saving");
     try {
-      const total = tlClips.reduce((s, c) => s + c.duration, 0);
-      const r = await fetch(`${API}/api/timelines`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: projectName || "Unbenannt",
-          stil: "manuell",
-          daten: {
-            segmente: tlClips.map((c) => ({
-              id: c.tlId, clip_id: c.clipId, label: c.name, track: "v1",
-              start: c.start, dauer: c.duration, quelle: "A",
-              media_start: c.mediaStart,
-              source_duration: c.sourceDuration,
-            })),
-            gesamtdauer: total,
-          },
-        }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const saved: TimelineDTO = await r.json();
-      setTimelines((cur) => [saved, ...cur]);
+      await saveClipsAs(projectName || "Unbenannt", tlClips);
       setSaveStatus("saved");
       setTimeout(() => setSaveStatus("idle"), 2000);
       toast(`Timeline "${projectName}" gespeichert.`, "ok");
@@ -3168,7 +3683,7 @@ export default function Editor() {
       const r = await fetch(`/api/scenes/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: search, limit: 12, min_similarity: 0.18 }),
+        body: JSON.stringify({ query: search, limit: 20, min_similarity: 0.18, modus: "auto", rewrite: false }),
       });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
@@ -3259,11 +3774,45 @@ export default function Editor() {
       const q = search.toLowerCase();
       list = list.filter((c) => c.dateiname.toLowerCase().includes(q));
     }
+    // Ordner-Ansicht: nur Clips des aktuellen Ordners (Suche geht über alle Ordner).
+    if (!search.trim()) list = list.filter((c) => (c.ordner_id ?? null) === aktOrdner);
     if (mediaSort === "name") list = [...list].sort((a, b) => a.dateiname.localeCompare(b.dateiname));
     else if (mediaSort === "duration") list = [...list].sort((a, b) => (b.dauer || 0) - (a.dauer || 0));
     else if (mediaSort === "recent") list = [...list].reverse();
+    else if (mediaSort === "timecode") list = [...list].sort((a, b) => (a.sync?.tc_start_s ?? Infinity) - (b.sync?.tc_start_s ?? Infinity) || a.dateiname.localeCompare(b.dateiname));
+    else if (mediaSort === "szene") list = [...list].sort((a, b) => ((a.sync?.szene ?? 1e9) - (b.sync?.szene ?? 1e9)) || ((a.sync?.plan ?? 1e9) - (b.sync?.plan ?? 1e9)) || ((a.sync?.prise ?? 1e9) - (b.sync?.prise ?? 1e9)) || a.dateiname.localeCompare(b.dateiname, undefined, { numeric: true }));
     return list;
-  }, [clips, search, mediaFilter, mediaSort]);
+  }, [clips, search, mediaFilter, mediaSort, aktOrdner]);
+  const unterOrdner = useMemo(() => ordnerListe.filter((o) => o.id !== null && (o.eltern_id ?? null) === aktOrdner).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })), [ordnerListe, aktOrdner]);
+  const ordnerPfad = useMemo(() => {
+    const kette: OrdnerDTO[] = [];
+    let cur = ordnerListe.find((o) => o.id === aktOrdner) ?? null;
+    let guard = 0;
+    while (cur && cur.id && guard++ < 50) { kette.unshift(cur); const e = cur.eltern_id; cur = e ? (ordnerListe.find((o) => o.id === e) ?? null) : null; }
+    return kette;
+  }, [ordnerListe, aktOrdner]);
+  const clipsInOrdnerRekursiv = (id: string | null): number => {
+    const direkt = clips.filter((c) => (c.ordner_id ?? null) === id).length;
+    return direkt + ordnerListe.filter((o) => o.id && (o.eltern_id ?? null) === id).reduce((a, o) => a + clipsInOrdnerRekursiv(o.id), 0);
+  };
+  const verschiebeClips = async (ids: string[], ziel: string | null) => {
+    try { await moveClipsToOrdner(ids, ziel); await refreshClips(); } catch (e) { console.warn(e); }
+  };
+  const neuerOrdner = async () => {
+    const name = window.prompt("Name des neuen Ordners:", "Neuer Ordner");
+    if (!name || !name.trim()) return;
+    try { await createOrdner(name.trim(), aktOrdner); refreshOrdner(); } catch (e) { console.warn(e); }
+  };
+  const ordnerKontext = (e: React.MouseEvent, o: OrdnerDTO) => {
+    e.preventDefault(); e.stopPropagation();
+    openMenuAt(e.clientX, e.clientY, [
+      { label: "Öffnen", onClick: () => { setOrdnerAuswahl(null); setAktOrdner(o.id); } },
+      { label: "Umbenennen…", onClick: async () => { const n = window.prompt("Neuer Name:", o.name); if (n && n.trim() && o.id) { try { await renameOrdner(o.id, n.trim()); refreshOrdner(); } catch (err) { console.warn(err); } } } },
+      { label: "Eine Ebene hoch verschieben", disabled: !o.eltern_id, onClick: async () => { if (!o.id) return; const el = ordnerListe.find((x) => x.id === o.eltern_id); try { await moveOrdner(o.id, el?.eltern_id ?? null); refreshOrdner(); } catch (err) { console.warn(err); } } },
+      { separator: true },
+      { label: "Ordner löschen (Clips bleiben)…", onClick: async () => { if (!o.id) return; if (!window.confirm(`Ordner „${o.name}“ löschen? Die Clips wandern in den übergeordneten Ordner.`)) return; try { await deleteOrdner(o.id); await refreshClips(); } catch (err) { console.warn(err); } } },
+    ]);
+  };
 
   /* ─── Sprint 4 Action helpers ─── */
   const goHome = () => {
@@ -3276,8 +3825,149 @@ export default function Editor() {
     toast("Zurück zur Übersicht.", "info", 1500);
   };
 
+  /** Legt ein neues, vollständig leeres Projekt an: eigene Datenbank, eigener
+   *  Medienordner, eigene Warteschlange. Der Wechsel dorthin verlangt einen
+   *  Neustart der Dienste, weil beides beim Start aus der Umgebung gelesen wird.
+   *  Deshalb wird am Ende der Befehl genannt, mit dem sich das Projekt öffnen lässt. */
+  // Stand des Arbeitswegs. Gesperrt wird nichts: Drehbuch und Material sind zwei
+  // voneinander unabhängige Zweige, die erst die Kontext-Schicht zusammenführt.
+  // Die Leiste zeigt deshalb nur, was vorliegt und was als Nächstes ansteht.
+  type Stand = { drehbuch: boolean; material: boolean; takes: boolean; medien: boolean; ausgewertet: boolean; kontext: boolean; plan: boolean;
+                 clips: number; ausgewertete: number; laufend: number; gescheitert: number; letzterFehler: string | null };
+  const [fortschritt, setFortschritt] = useState<Stand | null>(null);
+  const ladeFortschritt = async () => {
+    const hole = async (weg: string) => { try { const r = await fetch(weg); return r.ok ? await r.json() : null; } catch { return null; } };
+    const [sk, cl, as_, tk, kx, pl, ag] = await Promise.all([
+      hole(`/api/skript`), hole(`/api/clips`), hole(`/api/sync/assets`),
+      hole(`/api/sync/takes`), hole(`/api/skript/kontext`), hole(`/api/skript/schnittplan`),
+      hole(`/api/projekt/aufgaben`),
+    ]);
+    if (cl == null && sk == null) return;  // Backend offline: keine Anzeige statt falscher Anzeige
+    const liste = (x: unknown) => (Array.isArray(x) ? x : []);
+    const clips = liste(cl) as { status?: string }[];
+    setFortschritt({
+      drehbuch: !!(sk as { skript?: { id?: string } } | null)?.skript?.id,   // Antwort ist verschachtelt: {"skript": {...}}
+      material: liste(as_).length > 0,
+      takes: liste((tk as { takes?: unknown })?.takes).length > 0,
+      medien: clips.length > 0,
+      ausgewertet: clips.some((c) => c.status === "analysiert"),
+      kontext: liste((kx as { takes?: unknown })?.takes).length > 0,
+      plan: liste(pl).length > 0,
+      clips: clips.length,
+      ausgewertete: clips.filter((c) => c.status === "analysiert").length,
+      laufend: ((ag as { anzahl_laufend?: number } | null)?.anzahl_laufend) ?? 0,
+      gescheitert: ((ag as { anzahl_gescheitert?: number } | null)?.anzahl_gescheitert) ?? 0,
+      letzterFehler: liste((ag as { gescheitert?: unknown })?.gescheitert)
+        .map((j) => (j as { nachricht?: string }).nachricht)
+        .find((m): m is string => !!m) ?? null,
+    });
+  };
+  useEffect(() => { void ladeFortschritt(); }, [tab]);
+
+  /** Die sieben Schritte bis zur Timeline, mit Zustand und Ziel-Reiter.
+   *  „gesperrt“ meint nur: dieser Schritt kann jetzt noch nichts bewirken. Angeklickt
+   *  werden darf trotzdem alles, denn Drehbuch und Material laufen unabhängig. */
+  const schritte = useMemo(() => {
+    const f = fortschritt;
+    if (!f) return [];
+    const s = (nr: number, name: string, ziel: string, fertig: boolean, moeglich: boolean, warum?: string) =>
+      ({ nr, name, ziel, fertig, moeglich, warum });
+    return [
+      s(1, "Drehbuch", "skript", f.drehbuch, true),
+      s(2, "Material", "sync", f.material, true),
+      s(3, "Synchronisieren", "sync", f.takes, f.material, "Erst Material einlesen."),
+      s(4, "In Medien", "sync", f.medien, f.takes, "Erst synchronisieren."),
+      s(5, f.clips > 0 && !f.ausgewertet ? `Auswertung ${f.ausgewertete}/${f.clips}` : "Auswertung",
+        "sync", f.ausgewertet, f.medien, "Erst in die Medien übernehmen."),
+      s(6, "Kontext", "skript", f.kontext, f.drehbuch && f.ausgewertet,
+        !f.drehbuch && !f.ausgewertet ? "Braucht Drehbuch und ausgewertetes Material."
+          : !f.drehbuch ? "Es fehlt das Drehbuch." : "Das Material ist noch nicht ausgewertet."),
+      s(7, "Schnittplan", "skript", f.plan, f.kontext, "Erst den Kontext aufbauen."),
+    ];
+  }, [fortschritt]);
+  const naechsterSchritt = useMemo(() => schritte.find((x) => !x.fertig && x.moeglich) ?? null, [schritte]);
+
+  // Die zuletzt angelegten Projekte. Gewechselt wird über das Start-Skript, weil
+  // Datenbank und Medienordner beim Start aus der Umgebung gelesen werden; die Liste
+  // nennt deshalb den Befehl und legt ihn in die Zwischenablage.
+  type ProjektEintrag = { name: string; datenbank: string; port: number | null; startskript: string; befehl: string; geoeffnet: boolean };
+  const [projektListe, setProjektListe] = useState<ProjektEintrag[] | null>(null);
+  const [wechselLaeuft, setWechselLaeuft] = useState<string | null>(null);
+  /** Öffnet ein anderes Projekt: Backend und Arbeiter starten neu, die Oberfläche
+   *  bleibt stehen und lädt sich neu, sobald der neue Dienst antwortet. */
+  const oeffneProjekt = async (pr: ProjektEintrag) => {
+    if (pr.geoeffnet) return;
+    if (!confirm(`„${pr.name}" öffnen?\n\nDas laufende Projekt wird geschlossen. Nicht gespeicherte Änderungen an der Timeline gehen verloren.`)) return;
+    setWechselLaeuft(pr.name);
+    try {
+      const r = await fetch(`/api/projekt/wechseln`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startskript: pr.startskript }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        setWechselLaeuft(null);
+        toast(d?.detail || "Der Wechsel konnte nicht gestartet werden.", "err", 8000);
+        return;
+      }
+    } catch {
+      // Der Dienst beendet sich mitten in der Antwort — das ist der Normalfall.
+    }
+    // Warten, bis das neue Backend antwortet und die Zieldatenbank meldet.
+    for (let i = 0; i < 120; i++) {
+      await new Promise((f) => setTimeout(f, 1000));
+      try {
+        const a = await fetch(`/api/projekt`, { cache: "no-store" });
+        if (a.ok) {
+          const d = await a.json();
+          if (d?.datenbank === pr.datenbank) {
+            try { localStorage.removeItem(projektSchluessel("cinassist-last-timeline-id")); localStorage.removeItem("cinassist-last-timeline-id"); } catch { /* ohne Speicher weiter */ }
+            location.reload();
+            return;
+          }
+        }
+      } catch { /* Dienst noch nicht da */ }
+    }
+    setWechselLaeuft(null);
+    toast(`„${pr.name}" antwortet nicht. Im Terminal: ${pr.befehl}`, "err", 20000);
+  };
+
+  const zeigeProjekte = async () => {
+    try {
+      const r = await fetch(`/api/projekt/liste`);
+      if (!r.ok) { toast("Die Projektliste ist nicht verfügbar.", "err", 5000); return; }
+      const d = await r.json();
+      setProjektListe(Array.isArray(d?.projekte) ? d.projekte : []);
+    } catch { toast("Das Backend ist nicht erreichbar.", "err", 5000); }
+  };
+
+  const neuesProjekt = async () => {
+    const name = prompt("Name des neuen Projekts:\n\nEs entsteht ein leeres Projekt mit eigener Datenbank und eigenem Medienordner. Das aktuelle Projekt bleibt unberührt.");
+    if (name == null) return;
+    if (!name.trim()) { toast("Kein Name angegeben.", "warn", 3000); return; }
+    toast("Projekt wird angelegt…", "info", 4000);
+    try {
+      const r = await fetch(`/api/projekt/neu`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d?.detail || "Das Projekt konnte nicht angelegt werden.", "err", 8000); return; }
+      const befehl = d?.befehl as string | undefined;
+      if (befehl) {
+        try { await navigator.clipboard.writeText(befehl); } catch { /* ohne Zwischenablage weiter */ }
+        toast(`„${d.name}" angelegt. Zum Öffnen im Terminal: ${befehl} — der Befehl liegt in der Zwischenablage.`, "ok", 15000);
+      } else {
+        toast(`„${d.name}" angelegt.`, "ok", 8000);
+      }
+    } catch {
+      toast("Das Backend ist nicht erreichbar.", "err", 6000);
+    }
+  };
+
   const newTimeline = () => {
-    if (tlClips.length > 0 && !confirm("Aktuelle Timeline verwerfen und neu anfangen?")) return;
+    if (tlClips.length > 0 && !confirm("Aktuelle Timeline verwerfen?\n\nMedien, Drehbuch und Schnittpläne bleiben erhalten. Ein vollständig leeres Projekt legt das Skript neues_projekt.sh an.")) return;
     snapshot();
     setTlClips([]);
     setSelectedTlIds(new Set());
@@ -3285,7 +3975,7 @@ export default function Editor() {
     pause();
     setProjectName("Neues Projekt");
     setMarkers([]);
-    toast("Neue Timeline.", "ok", 1500);
+    toast("Timeline geleert. Medien und Drehbuch bleiben erhalten.", "ok", 2500);
   };
 
   const importFromMedia = () => {
@@ -3485,11 +4175,15 @@ export default function Editor() {
           const src = media.find((c) => c.id === seg.clipId);
           if (!src) return;
           const sourceDur = src.dauer || seg.duration;
+          // Overlay-Segment (Alternative/Cutaway): absolute Position + eigene Spur + stumm — KEIN Cursor-Vorschub.
+          // Ohne diese Felder: klassisch sequenziell auf V1.
+          const istOverlay = typeof seg.start === "number";
+          const vIdx = Math.max(0, Math.min(MAX_TRACKS - 1, seg.videoTrackIndex ?? 0));
           built.push({
             tlId: `gen-${now}-${i}-${seg.clipId}`,
             clipId: seg.clipId,
             name: seg.name || src.dateiname.replace(/\.[^/.]+$/, ""),
-            start: Math.round(cursor * 1000) / 1000,
+            start: Math.round((istOverlay ? (seg.start as number) : cursor) * 1000) / 1000,
             duration: seg.duration,
             mediaStart: seg.mediaStart,
             sourceDuration: sourceDur,
@@ -3497,11 +4191,12 @@ export default function Editor() {
             waveformUrl: abs(src.waveform_url),
             proxyUrl: abs(src.proxy_url || src.video_url),
             videoUrl: abs(src.video_url),
-            hasAudio: !!src.waveform_url,
-            videoTrackIndex: 0,
-            audioTrackIndex: 0,
+            videoTrackIndex: vIdx,
+            audioTrackIndex: vIdx,
+            ...medienSegmentFelder(src, vIdx),
+            ...(seg.videoOnly ? { hasAudio: false } : {}),
           });
-          cursor += seg.duration;
+          if (!istOverlay) cursor += seg.duration;
         });
         return cmd.replace ? built : [...clips, ...built];
       }
@@ -3529,9 +4224,10 @@ export default function Editor() {
           waveformUrl: abs(src.waveform_url),
           proxyUrl: abs(src.proxy_url || src.video_url),
           videoUrl: abs(src.video_url),
-          hasAudio: !!src.waveform_url,
           videoTrackIndex: vIdx,
           audioTrackIndex: vIdx,
+          ...medienSegmentFelder(src, vIdx),
+          ...(cmd.videoOnly ? { hasAudio: false } : {}),
         };
         return [...clips, seg];
       }
@@ -3561,6 +4257,13 @@ export default function Editor() {
     executeBatch: (batch, label) => {
       if (batch.length === 0) return;
       snapshot();
+      // Obere Spuren sichtbar machen: Alternativen auf V2/V3 brauchen die Spur auch im UI
+      const maxV = batch.reduce((m, c) => {
+        if (c.type === "insert") return Math.max(m, c.videoTrackIndex ?? 0);
+        if (c.type === "loadSequence") return Math.max(m, ...c.segments.map((s) => s.videoTrackIndex ?? 0));
+        return m;
+      }, 0);
+      if (maxV > 0) setNumVideoTracks((prev) => Math.max(prev, Math.min(MAX_TRACKS, maxV + 1)));
       batchModeRef.current = true;
       try {
         const clipCmds = batch.filter((c) => c.type !== "addMarker" && c.type !== "setRange");
@@ -3596,6 +4299,15 @@ export default function Editor() {
         default:
           return { ok: true };
       }
+    },
+    captureState: () => tlClips.map((c) => ({ ...c })),
+    persist: (label) => {
+      void saveClipsAs(label || "KI-Vorschlag", tlClips, "rohschnitt")
+        .then(() => toast(`Gespeichert: „${label}“`, "ok", 2500))
+        .catch(() => toast("Speichern der Fassung fehlgeschlagen", "err", 4000));
+    },
+    restoreState: (state) => {
+      if (Array.isArray(state)) setTlClips(state as TLClip[]);
     },
     getSnapshot: () => ({
       totalDuration,
@@ -4179,6 +4891,12 @@ export default function Editor() {
       {/* ─── Obere Leiste ─── */}
       <div style={{ height: 44, flex: "none", display: "flex", alignItems: "center", padding: "0 18px", background: "#161617", borderBottom: "1px solid #000", fontSize: 13 }}>
         <button onClick={goHome} title="Zurück zur Übersicht"><S w={17} sw={2} c="#cfcfcf"><path d="M19 12H5M12 19l-7-7 7-7" /></S></button>
+        {projekt && (
+          <span
+            title={`Geöffnetes Projekt · Datenbank ${projekt.datenbank}`}
+            style={{ marginLeft: 10, marginRight: 4, padding: "2px 8px", borderRadius: 5, background: "#1f1f21", border: "1px solid #2a2a2e", color: "#9a9a9a", fontSize: 11, whiteSpace: "nowrap", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}
+          >{projekt.name}</span>
+        )}
         <input
           value={projectName}
           onChange={(e) => setProjectName(e.target.value)}
@@ -4194,7 +4912,10 @@ export default function Editor() {
             const menuAction = (fn: () => void) => () => { fn(); setOpenMenu(null); };
             const menus: { key: string; label: string; items: React.ReactNode }[] = [
               { key: "datei", label: "Datei", items: <>
-                <button style={item} onClick={menuAction(newTimeline)}>Neu {kbd("Cmd N")}</button>
+                <button style={item} onClick={menuAction(() => { void zeigeProjekte(); })} title="Zeigt die angelegten Projekte. Ein Klick öffnet eines davon.">Projekte öffnen…</button>
+                <button style={item} onClick={menuAction(() => { void neuesProjekt(); })} title="Legt ein leeres Projekt mit eigener Datenbank und eigenem Medienordner an.">Neues Projekt…</button>
+                <div style={sep} />
+                <button style={item} onClick={menuAction(newTimeline)} title="Leert die Timeline. Medien, Drehbuch und Schnittpläne bleiben erhalten.">Neue Timeline {kbd("Cmd N")}</button>
                 <button style={item} onClick={menuAction(() => setHistOpen(true))}>Öffnen… {kbd("Cmd O")}</button>
                 <button style={item} onClick={menuAction(importFromMedia)}>Aus Medien importieren</button>
                 <div style={sep} />
@@ -4274,7 +4995,7 @@ export default function Editor() {
             <S w={17} c="currentColor"><path d="M22 2 11 13" /><path d="M22 2l-7 20-4-9-9-4 20-7z" /></S>Senden
           </button>
           {openMenu === "senden" && (() => {
-            const menuAction = (app: NleApp, label: string) => () => {
+            const menuAction = (app: NleApp, label: string, mode: "timeline" | "projekt" = "timeline") => () => {
               setOpenMenu(null);
               const vSegs: ExportSegment[] = tlClips
                 .filter((c) => (c.videoTrackIndex ?? 0) >= 0)
@@ -4287,8 +5008,8 @@ export default function Editor() {
                   mediaStart: c.mediaStart,
                 }));
               if (vSegs.length === 0) { toast("Timeline ist leer.", "warn", 1800); return; }
-              toast(`Sende an ${label}…`, "info", 1500);
-              sendToApp({ app, segments: vSegs, name: (projectName?.trim() || "CinAssist_Timeline") })
+              toast(mode === "projekt" ? `Baue Projekt in ${label} (Bins, Metadaten, Marker)…` : `Sende an ${label}…`, "info", 2500);
+              sendToApp({ app, segments: vSegs, name: (projectName?.trim() || "CinAssist_Timeline"), fps: PROJECT_FPS, mode })
                 .then((r) => {
                   if (r.status === "download" && r.download_url) {
                     const a = document.createElement("a");
@@ -4304,8 +5025,11 @@ export default function Editor() {
             };
             const item: CSSProperties = { display: "block", width: "100%", textAlign: "left", padding: "7px 12px", borderRadius: 6, fontSize: 13, color: "#cfcfcf", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" };
             return (
-              <div style={{ position: "absolute", top: 34, right: 0, background: "#242426", borderRadius: 8, padding: 4, zIndex: 50, boxShadow: "0 8px 24px rgba(0,0,0,.5)", minWidth: 200 }}>
-                <button style={item} onClick={menuAction("davinci", "DaVinci Resolve")}>DaVinci Resolve</button>
+              <div style={{ position: "absolute", top: 34, right: 0, background: "#242426", borderRadius: 8, padding: 4, zIndex: 50, boxShadow: "0 8px 24px rgba(0,0,0,.5)", minWidth: 260 }}>
+                <div style={{ padding: "5px 12px 2px", fontSize: 11, color: "#8a8a8a", textTransform: "uppercase", letterSpacing: 0.5 }}>DaVinci Resolve</div>
+                <button style={item} onClick={menuAction("davinci", "DaVinci Resolve", "timeline")}>Nur Timeline senden</button>
+                <button style={item} onClick={menuAction("davinci", "DaVinci Resolve", "projekt")} title="Bins je Szene, Scene/Shot/Take-Metadaten, Beat-Marker auf den Clips + Timeline">Ganzes Projekt aufbauen</button>
+                <div style={{ height: 1, background: "#3a3a3c", margin: "4px 8px" }} />
                 <button style={item} onClick={menuAction("premiere", "Premiere Pro")}>Premiere Pro</button>
                 <button style={item} onClick={menuAction("fcp", "Final Cut Pro")}>Final Cut Pro</button>
                 <button style={item} onClick={menuAction("avid", "Avid Media Composer")}>AVID Media Composer</button>
@@ -4327,6 +5051,121 @@ export default function Editor() {
           )}
         </div>
       </div>
+
+      {/* ─── Projektliste ─── */}
+      {projektListe && (
+        <div onClick={() => setProjektListe(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.55)", zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 560, maxHeight: "70vh", overflowY: "auto", background: "#161617", border: "1px solid #232326", borderRadius: 12, padding: 18, color: "#e9e9e9", fontSize: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#b9d94a", marginBottom: 4 }}>Projekte</div>
+            <div style={{ color: "#8a8a8a", marginBottom: 14, lineHeight: 1.5 }}>
+              Jedes Projekt hat eine eigene Datenbank und einen eigenen Medienordner. Ein Wechsel
+              verlangt einen Neustart der Dienste. Ein Klick legt den nötigen Befehl in die Zwischenablage.
+            </div>
+            {projektListe.length === 0 && <div style={{ color: "#7a7a7a" }}>Noch keine Projekte angelegt.</div>}
+            {wechselLaeuft && (
+              <div style={{ marginBottom: 10, padding: "8px 10px", borderRadius: 6, background: "rgba(185,217,74,.10)", border: "1px solid #4a5a20", color: "#b9d94a" }}>
+                „{wechselLaeuft}" wird geöffnet — Backend und Arbeiter starten neu. Die Seite lädt sich von selbst neu.
+              </div>
+            )}
+            {projektListe.map((pr) => (
+              <button
+                key={pr.datenbank}
+                disabled={pr.geoeffnet || !!wechselLaeuft}
+                onClick={() => { void oeffneProjekt(pr); }}
+                style={{
+                  display: "block", width: "100%", textAlign: "left", marginBottom: 6,
+                  padding: "9px 12px", borderRadius: 8, fontFamily: "inherit", fontSize: 12,
+                  background: pr.geoeffnet ? "rgba(185,217,74,.10)" : "#1c1c1e",
+                  border: `1px solid ${pr.geoeffnet ? "#4a5a20" : "#242426"}`,
+                  color: "#cfcfcf", cursor: pr.geoeffnet ? "default" : "pointer",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontWeight: 600 }}>{pr.name}</span>
+                  {pr.geoeffnet && <span style={{ fontSize: 10, color: "#b9d94a", border: "1px solid #4a5a20", borderRadius: 4, padding: "0 5px" }}>geöffnet</span>}
+                </div>
+                <div style={{ color: "#7a7a7a", fontFamily: "ui-monospace, monospace", fontSize: 10, marginTop: 3 }}>
+                  {pr.datenbank}{pr.port ? ` · Port ${pr.port}` : ""} · {pr.startskript}
+                </div>
+              </button>
+            ))}
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+              <button onClick={() => setProjektListe(null)} style={{ background: "#242426", border: "none", borderRadius: 6, padding: "6px 14px", color: "#cfcfcf", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>Schließen</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── Arbeitsweg: die sieben Schritte bis zur Timeline ───
+          Zeigt den Stand, sperrt aber nichts. Drehbuch und Material sind zwei
+          unabhängige Zweige; zusammengeführt werden sie erst im Kontext. */}
+      {schritte.length > 0 && !isMobile && (
+        <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 2, padding: "0 14px", height: 30, background: "#141416", borderBottom: "1px solid #000", overflowX: "auto" }}>
+          {schritte.map((sch, i) => {
+            const dran = naechsterSchritt?.nr === sch.nr;
+            const farbe = sch.fertig ? "#5fbf6a" : dran ? "#b9d94a" : sch.moeglich ? "#9a9a9a" : "#5a5a5a";
+            const titel = sch.fertig ? `Schritt ${sch.nr}: liegt vor`
+              : dran ? `Schritt ${sch.nr}: als Nächstes dran`
+              : sch.moeglich ? `Schritt ${sch.nr}: noch offen`
+              : `Schritt ${sch.nr}: noch nicht möglich — ${sch.warum}`;
+            return (
+              <span key={sch.nr} style={{ display: "flex", alignItems: "center", gap: 2 }}>
+                {i > 0 && <span style={{ color: "#3a3a3c", fontSize: 11, padding: "0 2px" }}>→</span>}
+                <button
+                  onClick={() => setTab(sch.ziel)}
+                  title={titel}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+                    background: dran ? "rgba(185,217,74,.10)" : "transparent",
+                    border: dran ? "1px solid #4a5a20" : "1px solid transparent",
+                    borderRadius: 5, padding: "2px 7px", cursor: "pointer",
+                    color: farbe, fontSize: 11, fontFamily: "inherit",
+                  }}
+                >
+                  <span style={{
+                    width: 14, height: 14, borderRadius: 7, flex: "none",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 9, fontWeight: 600,
+                    background: sch.fertig ? "#5fbf6a" : "transparent",
+                    border: sch.fertig ? "none" : `1px solid ${farbe}`,
+                    color: sch.fertig ? "#0d0d0d" : farbe,
+                  }}>{sch.fertig ? "✓" : sch.nr}</span>
+                  {sch.name}
+                </button>
+              </span>
+            );
+          })}
+          <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, paddingLeft: 12, whiteSpace: "nowrap" }}>
+            {!!fortschritt?.laufend && (
+              <span style={{ color: "#b9d94a", fontSize: 11 }}>{fortschritt.laufend} läuft gerade</span>
+            )}
+            {!!fortschritt?.gescheitert && (
+              <button
+                onClick={() => toast(fortschritt.letzterFehler || "Ein Auftrag ist gescheitert.", "err", 10000)}
+                title={fortschritt.letzterFehler || undefined}
+                style={{ color: "#e2574a", fontSize: 11, background: "rgba(226,87,74,.12)", border: "1px solid rgba(226,87,74,.35)", borderRadius: 5, padding: "1px 7px", cursor: "pointer", fontFamily: "inherit" }}
+              >{fortschritt.gescheitert} fehlgeschlagen</button>
+            )}
+            {naechsterSchritt && (
+              <span style={{ color: "#7a7a7a", fontSize: 11 }}>Als Nächstes: {naechsterSchritt.name}</span>
+            )}
+          </span>
+        </div>
+      )}
+
+      {/* ─── Wegweiser: was jetzt zu tun ist ───
+          Erscheint nur, solange die Kette nicht steht. Er nennt den Schritt, sagt
+          warum, und bringt einen dorthin. */}
+      {naechsterSchritt && !isMobile && (
+        <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 12, padding: "7px 16px", background: "rgba(185,217,74,.06)", borderBottom: "1px solid #1c1c1e", fontSize: 12 }}>
+          <span style={{ color: "#b9d94a", fontWeight: 600, whiteSpace: "nowrap" }}>Schritt {naechsterSchritt.nr}</span>
+          <span style={{ color: "#cfcfcf" }}>{WEGWEISER[naechsterSchritt.nr] ?? naechsterSchritt.name}</span>
+          <button
+            onClick={() => setTab(naechsterSchritt.ziel)}
+            style={{ marginLeft: "auto", flex: "none", background: "#b9d94a", color: "#12140a", border: "none", borderRadius: 6, padding: "4px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+          >Dorthin</button>
+        </div>
+      )}
 
       {/* ─── Mittelbereich + Timeline : redimensionnables (Wave 3) ───
           PanelGroup vertical (haut/bas) → à l'intérieur du haut, PanelGroup
@@ -4424,10 +5263,23 @@ export default function Editor() {
               ref={playerContainerRef}
               style={{ position: "absolute", inset: 0, background: "#000" }}
             />
+            {activeTlClip && (() => {
+              // Clip unter dem Playhead hat noch keinen Proxy (Analyse läuft): statt Schwarz sagen, was los ist.
+              const src = clips.find((c) => c.id === activeTlClip.clipId);
+              if (!src || src.proxy_url || src.status !== "hochgeladen") return null;
+              return (
+                <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+                  <div style={{ background: "rgba(0,0,0,0.6)", border: "1px solid #2a2a2e", borderRadius: 10, padding: "12px 18px", color: "#cfcfcf", fontSize: 13, display: "flex", alignItems: "center", gap: 10 }}>
+                    <S w={16} c="#b9d94a" sw={2.4} style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>
+                    <span><b>{src.dateiname}</b> — Vorschau wird erzeugt (Proxy). Wiedergabe folgt automatisch.</span>
+                  </div>
+                </div>
+              );
+            })()}
             {!activeTlClip && (
               <div style={{ position: "absolute", inset: 0, background: "#000" }}>
                 <div style={{ position: "absolute", top: "40%", left: 0, right: 0, textAlign: "center", color: "rgba(255,255,255,0.85)", fontSize: 14, fontWeight: 500 }}>
-                  {loading ? "Clips werden geladen…" : error ? `Backend nicht erreichbar: ${error}` : "Keine Vorschau — wähle einen Clip"}
+                  {loading ? "Clips werden geladen…" : error ? `Backend nicht erreichbar: ${error}` : ""}
                 </div>
               </div>
             )}
@@ -4523,7 +5375,7 @@ export default function Editor() {
               ref={fileInputRef}
               type="file"
               multiple
-              accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,.mp4,.mov,.avi,.mkv,.webm"
+              accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm,audio/*,.mp4,.mov,.avi,.mkv,.webm,.m4v,.mxf,.mp3,.wav,.m4a,.aac,.flac,.aif,.aiff,.ogg,.opus"
               style={{ display: "none" }}
               onChange={(e) => { if (e.target.files) handleFiles(e.target.files); e.target.value = ""; }}
             />
@@ -4561,6 +5413,8 @@ export default function Editor() {
                     ["name", "Name (A→Z)"],
                     ["duration", "Dauer (lang→kurz)"],
                     ["recent", "Zuletzt zuerst"],
+                    ["szene", "Szene / Einstellung / Take"],
+                    ["timecode", "Timecode (Drehreihenfolge)"],
                   ] as const).map(([k, l]) => (
                     <button key={k} onClick={() => { setMediaSort(k); setOpenMenu(null); }}
                       style={{ display: "block", width: "100%", textAlign: "left", padding: "7px 12px", borderRadius: 6, fontSize: 12, color: mediaSort === k ? "#e0b84a" : "#cfcfcf", background: "transparent", border: "none", cursor: "pointer", fontFamily: "inherit" }}>
@@ -4580,6 +5434,28 @@ export default function Editor() {
             </button>
           </div>
 
+          {/* ─── Ordner-Leiste: Pfad (Breadcrumb) + Neuer Ordner + Ordner importieren ─── */}
+          <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 4, padding: "6px 12px", borderBottom: "1px solid #1c1c1e", fontSize: 12, minWidth: 0 }}>
+            {[{ id: null as string | null, name: "Medien" } as { id: string | null; name: string }, ...ordnerPfad].map((o, i, arr) => (
+              <span key={o.id ?? "root"} style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0 }}>
+                {i > 0 && <span style={{ color: "#5a5a5e" }}>›</span>}
+                <button onClick={() => { setOrdnerAuswahl(null); setAktOrdner(o.id); }}
+                  onDragOver={(e) => { if (e.dataTransfer.types.includes("application/x-cinassist-media")) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } }}
+                  onDrop={(e) => { const raw = e.dataTransfer.getData("application/x-cinassist-media-multi"); const one = e.dataTransfer.getData("application/x-cinassist-media"); const ids = raw ? (JSON.parse(raw) as string[]) : one ? [one] : []; if (ids.length) { e.preventDefault(); void verschiebeClips(ids, o.id); } }}
+                  style={{ background: "transparent", border: "none", color: i === arr.length - 1 ? "#e6e6e6" : "#9a9a9a", fontWeight: i === arr.length - 1 ? 600 : 400, cursor: "pointer", padding: "2px 4px", borderRadius: 4, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160 }}>
+                  {o.name}
+                </button>
+              </span>
+            ))}
+            <span style={{ flex: 1 }} />
+            <button onClick={() => void neuerOrdner()} title="Neuen Ordner im aktuellen Ordner anlegen" style={{ display: "flex", alignItems: "center", gap: 4, background: "#242426", border: "1px solid #2a2a2e", borderRadius: 6, padding: "3px 8px", color: "#cfcfcf", fontSize: 11, cursor: "pointer" }}>
+              <S w={13} sw={2}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 11v6M9 14h6" /></S>Neuer Ordner
+            </button>
+            <button onClick={() => setOrdnerBrowserOffen(true)} title="Einen Ordner mit Videos per Referenz importieren (keine Kopie) — er erscheint als Ordner hier" style={{ display: "flex", alignItems: "center", gap: 4, background: "#242426", border: "1px solid #2a2a2e", borderRadius: 6, padding: "3px 8px", color: "#cfcfcf", fontSize: 11, cursor: "pointer" }}>
+              <S w={13} sw={2}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M12 17v-6M9 14l3 3 3-3" /></S>Ordner importieren …
+            </button>
+          </div>
+
           {showSearch && (
             <div style={{ padding: "10px 16px 4px", borderBottom: searchResults.length > 0 || searchMeta ? "1px solid #1c1c1e" : "none" }}>
               <form onSubmit={(e) => { e.preventDefault(); runSearch(); }} style={{ display: "flex", gap: 6 }}>
@@ -4592,7 +5468,7 @@ export default function Editor() {
                   <input
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="KI-Suche · z. B. 'sunset drone shot', 'Person spricht', 'Straßenszene'…"
+                    placeholder="KI-Suche"
                     style={{ width: "100%", height: 32, padding: "0 30px 0 32px", background: "#1a1a1c", border: "1px solid #232326", borderRadius: 8, color: "#e0e0e0", fontSize: 12, fontFamily: "inherit", outline: "none" }}
                   />
                   {search && (
@@ -4609,7 +5485,7 @@ export default function Editor() {
                 <button
                   type="submit"
                   disabled={!search.trim() || searchBusy}
-                  style={{ padding: "0 14px", height: 32, borderRadius: 8, background: !search.trim() || searchBusy ? "#2a2338" : "#3a2a5a", color: !search.trim() || searchBusy ? "#5a5a5a" : "#c9a4ff", fontSize: 12, fontWeight: 600, border: "1px solid #4a3a6a", cursor: !search.trim() || searchBusy ? "not-allowed" : "pointer" }}
+                  style={{ padding: "0 14px", height: 32, borderRadius: 8, background: !search.trim() || searchBusy ? "#1c232e" : "#1f3352", color: !search.trim() || searchBusy ? "#5a5a5a" : "#7fb2ff", fontSize: 12, fontWeight: 600, border: "1px solid #2f4a72", cursor: !search.trim() || searchBusy ? "not-allowed" : "pointer" }}
                 >
                   KI-Suche
                 </button>
@@ -4701,7 +5577,7 @@ export default function Editor() {
                           key={`st-${t.label}`}
                           onClick={() => { setSearch(t.query); setTimeout(runSearch, 0); }}
                           title={t.query}
-                          style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 999, background: "rgba(58,42,90,0.35)", border: "1px solid rgba(74,58,106,0.7)", color: "#c9a4ff", fontSize: 10.5, cursor: "pointer", fontFamily: "inherit" }}
+                          style={{ display: "flex", alignItems: "center", gap: 4, padding: "3px 8px", borderRadius: 999, background: "rgba(31,51,82,0.45)", border: "1px solid rgba(47,74,114,0.8)", color: "#7fb2ff", fontSize: 10.5, cursor: "pointer", fontFamily: "inherit" }}
                         >
                           <svg width={9} height={9} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.65 }}><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z" /></svg>
                           {t.label}
@@ -4899,7 +5775,7 @@ export default function Editor() {
             style={{ flex: 1, overflow: "auto", padding: "12px 16px", minHeight: 0, position: "relative", userSelect: mediaMarquee ? "none" : "auto", outline: dropTargetActive ? "2px dashed #b9d94a" : "none", outlineOffset: -8, background: dropTargetActive ? "rgba(185,217,74,0.06)" : undefined }}
           >
             {loading && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>Clips werden geladen…</div>}
-            {!loading && gridMedia.length === 0 && !error && uploadQueue.length === 0 && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>Keine Clips — ziehe Videos hier hin oder klicke oben auf Upload.</div>}
+            {!loading && gridMedia.length === 0 && !error && uploadQueue.length === 0 && unterOrdner.length === 0 && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>{aktOrdner ? "Dieser Ordner ist leer — Clips per Drag & Drop hierher verschieben." : "Keine Clips — Videos hier hineinziehen, oben „Upload“ klicken oder „Ordner importieren …“."}</div>}
             {error && !loading && <div style={{ textAlign: "center", color: "#e07a7a", padding: 20, fontSize: 11 }}>Backend offline: {error}</div>}
             {uploadQueue.length > 0 && (
               <div style={{ marginBottom: 10, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -4946,12 +5822,32 @@ export default function Editor() {
             })()}
             {mediaView === "grid" ? (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+                {!search.trim() && unterOrdner.map((o) => {
+                  const n = clipsInOrdnerRekursiv(o.id);
+                  const ziel = ordnerDropZiel === o.id;
+                  return (
+                    <button key={`ordner-${o.id}`} onDoubleClick={() => { setOrdnerAuswahl(null); setAktOrdner(o.id); }} onClick={() => { setOrdnerAuswahl(o.id); setSelectedMedia(new Set()); }} onContextMenu={(e) => ordnerKontext(e, o)}
+                      onDragOver={(e) => { const intern = e.dataTransfer.types.includes("application/x-cinassist-media"); const dateien = e.dataTransfer.types.includes("Files"); if (intern || dateien) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = intern ? "move" : "copy"; if (!ziel) setOrdnerDropZiel(o.id); } }}
+                      onDragLeave={() => { if (ziel) setOrdnerDropZiel(null); }}
+                      onDrop={(e) => { setOrdnerDropZiel(null); if (e.dataTransfer.files && e.dataTransfer.files.length > 0) { e.preventDefault(); e.stopPropagation(); setDropTargetActive(false); handleFiles(e.dataTransfer.files, o.id); return; } const raw = e.dataTransfer.getData("application/x-cinassist-media-multi"); const one = e.dataTransfer.getData("application/x-cinassist-media"); const ids = raw ? (JSON.parse(raw) as string[]) : one ? [one] : []; if (ids.length) { e.preventDefault(); e.stopPropagation(); void verschiebeClips(ids, o.id); } }}
+                      title={`${o.name} — Klick: auswählen · Doppelklick: öffnen`}
+                      style={{ borderRadius: 7, overflow: "hidden", background: ziel ? "rgba(185,217,74,0.15)" : ordnerAuswahl === o.id ? "#26261e" : "#151517", textAlign: "left", outline: ziel ? "2px dashed #b9d94a" : ordnerAuswahl === o.id ? "2px solid #e5c100" : "1px solid #26262a", cursor: "pointer", display: "flex", flexDirection: "column" }}>
+                      <div style={{ height: 68, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <S w={34} c={ziel ? "#b9d94a" : "#e0b84a"} sw={1.4}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></S>
+                      </div>
+                      <div style={{ padding: "5px 7px 6px", fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", color: "#e6e6e6", fontWeight: 600 }}>{o.name}</span>
+                        <span style={{ color: "#8a8a8a" }}>{n}</span>
+                      </div>
+                    </button>
+                  );
+                })}
                 {gridMedia.map((c, i) => {
                   const sel = selectedMedia.has(c.id);
                   const strip = abs(c.strip_url);
-                  const isMusic = !!c.waveform_url;
+                  const isMusic = c.medientyp === "audio";
                   return (
-                    <button key={c.id} data-media-id={c.id} onClick={(e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) toggleMedia(c.id); else setSelectedMedia(new Set([c.id])); }} onDoubleClick={() => appendClip(c.id)}
+                    <button key={c.id} data-media-id={c.id} data-medienart={c.medienart ?? (isMusic ? "audio" : "av")} onClick={(e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) toggleMedia(c.id); else setSelectedMedia(new Set([c.id])); }} onDoubleClick={() => appendClip(c.id)}
                       onContextMenu={(e) => {
                         e.preventDefault(); e.stopPropagation();
                         // Si le clip fait partie d'une sélection multi, on cible toute la sélection
@@ -4962,6 +5858,10 @@ export default function Editor() {
                         openMenuAt(e.clientX, e.clientY, [
                           { label: "Analyse anzeigen", onClick: () => setAnalysisClipId(c.id) },
                           { label: "Auf Timeline hinzufügen", onClick: () => appendClip(c.id) },
+                          { separator: true },
+                          { label: "In Ordner verschieben…", onClick: () => setOrdnerWahl({ clipIds: targets }) },
+                          { label: targets.length > 1 ? `${targets.length} Clips neu transkribieren` : "Neu transkribieren", onClick: () => { Promise.all(targets.map((id) => clipNeuTranskribieren(id))).then(() => toast(`${targets.length} Neu-Transkription(en) gestartet (aktuelle Sprache/Glossar/Kanal).`, "ok", 3000)).catch((err) => toast((err as Error).message, "err")); } },
+                          { label: targets.length > 1 ? `${targets.length} Clips neu analysieren` : "Neu analysieren (komplett)", onClick: () => { Promise.all(targets.map((id) => clipNeuAnalysieren(id))).then(() => { toast(`${targets.length} Neu-Analyse(n) eingereiht (Bildanalyse mit Stichproben, Whisper, Szenen).`, "ok", 3000); void refreshClips(); }).catch((err) => toast((err as Error).message, "err")); } },
                           { separator: true },
                           { label: targets.length > 1 ? `${targets.length} Clips löschen…` : "Löschen…", kbd: "Entf", onClick: () => deleteMedia(targets) },
                         ]);
@@ -4983,23 +5883,43 @@ export default function Editor() {
                       style={{ borderRadius: 7, overflow: "hidden", background: "#1a1a1c", textAlign: "left", outline: sel ? "2px solid #e5c100" : "none", cursor: "grab" }}>
                       <div style={{ position: "relative", height: 68, background: strip ? `url(${strip}) center/cover no-repeat` : FALLBACK_GRADS[i % FALLBACK_GRADS.length] }}>
                         <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 20, background: "linear-gradient(rgba(0,0,0,0),rgba(0,0,0,.75))", display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "0 4px 3px" }}>
-                          {isMusic && <MusicIcon w={9} c="#dcdcdc" />}
+                          <span title={c.medienart === "audio" ? "Nur Ton" : c.medienart === "video" ? "Nur Bild (Kameraspur ohne Ton)" : "Bild + Ton"} style={{ display: "inline-flex", gap: 2, alignItems: "center" }}>
+                            {(c.medienart ?? (isMusic ? "audio" : "av")) !== "audio" && <FilmIcon c="#dcdcdc" />}
+                            {(c.medienart ?? (isMusic ? "audio" : "av")) !== "video" && <MusicIcon w={9} c="#dcdcdc" />}
+                          </span>
+                          {c.status === "hochgeladen" && <span title="Analyse läuft — Vignetten, Waveform und Transkript folgen" style={{ fontSize: 9, color: "#b9d94a", fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}><S w={9} c="#b9d94a" sw={2.6} style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>Analyse</span>}
                           <span style={{ fontSize: 10, color: "#f0f0f0", fontWeight: 600, marginLeft: "auto" }}>{fmtSec(c.dauer)}</span>
                         </div>
                         <div style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: 2, background: c.status === "analysiert" ? "#4ec06a" : "#e0a020" }} />
                       </div>
-                      <div style={{ fontSize: 10, color: "#9a9a9a", padding: "5px 6px 6px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.dateiname}</div>
+                      <div style={{ fontSize: 10, color: "#9a9a9a", padding: "5px 6px 2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.dateiname}</div>
+                      {c.sync?.ton && (
+                        <div title={`Synchronisierter Ton: ${c.sync.ton.dateiname} · Offset ${c.sync.ton.offset_s >= 0 ? "+" : ""}${c.sync.ton.offset_s.toFixed(3)} s · ${c.sync.ton.methode} · ${Math.round(c.sync.ton.konfidenz * 100)} %${c.sync.multicam_gruppe ? " · Multicam" : ""}`}
+                          style={{ fontSize: 9.5, color: "#7fd4c4", padding: "0 6px 6px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", display: "flex", alignItems: "center", gap: 3 }}>
+                          <MusicIcon w={9} c="#7fd4c4" />{c.sync.ton.dateiname}{c.sync.multicam_gruppe ? " · MC" : ""}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {!search.trim() && unterOrdner.map((o) => (
+                  <button key={`ordner-${o.id}`} onClick={() => { setOrdnerAuswahl(o.id); setSelectedMedia(new Set()); }} onDoubleClick={() => { setOrdnerAuswahl(null); setAktOrdner(o.id); }} onContextMenu={(e) => ordnerKontext(e, o)} title={`${o.name} — Klick: auswählen · Doppelklick: öffnen`}
+                    onDragOver={(e) => { if (e.dataTransfer.types.includes("application/x-cinassist-media") || e.dataTransfer.types.includes("Files")) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = e.dataTransfer.types.includes("Files") ? "copy" : "move"; } }}
+                    onDrop={(e) => { if (e.dataTransfer.files && e.dataTransfer.files.length > 0) { e.preventDefault(); e.stopPropagation(); setDropTargetActive(false); handleFiles(e.dataTransfer.files, o.id); return; } const raw = e.dataTransfer.getData("application/x-cinassist-media-multi"); const one = e.dataTransfer.getData("application/x-cinassist-media"); const ids = raw ? (JSON.parse(raw) as string[]) : one ? [one] : []; if (ids.length) { e.preventDefault(); e.stopPropagation(); void verschiebeClips(ids, o.id); } }}
+                    style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", borderRadius: 6, background: ordnerAuswahl === o.id ? "#26261e" : "#151517", border: ordnerAuswahl === o.id ? "1px solid #e5c100" : "1px solid #26262a", textAlign: "left", cursor: "pointer", fontSize: 12 }}>
+                    <S w={16} c="#e0b84a" sw={1.6}><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></S>
+                    <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: 600 }}>{o.name}</span>
+                    <span style={{ color: "#8a8a8a" }}>{clipsInOrdnerRekursiv(o.id)} Clip(s)</span>
+                  </button>
+                ))}
                 {gridMedia.map((c) => {
                   const sel = selectedMedia.has(c.id);
-                  const isMusic = !!c.waveform_url;
+                  const isMusic = c.medientyp === "audio";
                   return (
-                    <button key={c.id} data-media-id={c.id} onClick={(e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) toggleMedia(c.id); else setSelectedMedia(new Set([c.id])); }} onDoubleClick={() => appendClip(c.id)}
+                    <button key={c.id} data-media-id={c.id} data-medienart={c.medienart ?? (isMusic ? "audio" : "av")} onClick={(e) => { if (e.shiftKey || e.metaKey || e.ctrlKey) toggleMedia(c.id); else setSelectedMedia(new Set([c.id])); }} onDoubleClick={() => appendClip(c.id)}
                       onContextMenu={(e) => {
                         e.preventDefault(); e.stopPropagation();
                         // Si le clip fait partie d'une sélection multi, on cible toute la sélection
@@ -5010,6 +5930,10 @@ export default function Editor() {
                         openMenuAt(e.clientX, e.clientY, [
                           { label: "Analyse anzeigen", onClick: () => setAnalysisClipId(c.id) },
                           { label: "Auf Timeline hinzufügen", onClick: () => appendClip(c.id) },
+                          { separator: true },
+                          { label: "In Ordner verschieben…", onClick: () => setOrdnerWahl({ clipIds: targets }) },
+                          { label: targets.length > 1 ? `${targets.length} Clips neu transkribieren` : "Neu transkribieren", onClick: () => { Promise.all(targets.map((id) => clipNeuTranskribieren(id))).then(() => toast(`${targets.length} Neu-Transkription(en) gestartet (aktuelle Sprache/Glossar/Kanal).`, "ok", 3000)).catch((err) => toast((err as Error).message, "err")); } },
+                          { label: targets.length > 1 ? `${targets.length} Clips neu analysieren` : "Neu analysieren (komplett)", onClick: () => { Promise.all(targets.map((id) => clipNeuAnalysieren(id))).then(() => { toast(`${targets.length} Neu-Analyse(n) eingereiht (Bildanalyse mit Stichproben, Whisper, Szenen).`, "ok", 3000); void refreshClips(); }).catch((err) => toast((err as Error).message, "err")); } },
                           { separator: true },
                           { label: targets.length > 1 ? `${targets.length} Clips löschen…` : "Löschen…", kbd: "Entf", onClick: () => deleteMedia(targets) },
                         ]);
@@ -5043,7 +5967,7 @@ export default function Editor() {
             <S w={15} c="#b5b5b5"><circle cx="12" cy="12" r="9" /><path d="M12 8v4l2.5 2.5" /></S>
             <span style={{ marginLeft: 6 }}>Marker</span>
             <span style={{ flex: 1, textAlign: "center", color: "#8a8a8a" }}>
-              {selectedMedia.size > 0 ? `${selectedMedia.size} ausgewählt` : `${clips.length} Elemente ‖ ${fmtSec(clips.reduce((s, c) => s + (c.dauer || 0), 0))}`}
+              {selectedMedia.size > 0 ? `${selectedMedia.size} ausgewählt` : `${clips.length} Elemente ‖ ${fmtSec(clips.reduce((s, c) => s + (c.dauer || 0), 0))}${clips.some((c) => c.status === "hochgeladen") ? ` · ${clips.filter((c) => c.status === "hochgeladen").length} in Analyse` : ""}`}
             </span>
             {selectedMedia.size > 0 && (
               <button
@@ -5773,7 +6697,7 @@ export default function Editor() {
                   onClick={(e) => clickTlClip(c.tlId, e, c.start, "v")}
                   onContextMenu={(e) => openClipMenu(e, c)}
                   onMouseDown={(e) => beginClipDrag(e, c, "v")}
-                  style={{ position: "absolute", left: `${clipToPct(c.start)}%`, width: `${clipWidthPct(c.duration)}%`, height: vH, borderRadius: 7, overflow: "hidden", background: sel ? "#0d1f3a" : "#232326", boxShadow: (sel && (selectedAvSide[c.tlId] !== "a")) ? "0 0 0 2px #e5c100" : "none", cursor: locked ? "not-allowed" : "grab", opacity: tHidden ? 0.3 : 1, filter: tHidden ? "grayscale(1)" : "none" }}>
+                  style={{ position: "absolute", left: `${clipToPct(c.start)}%`, width: `${clipWidthPct(c.duration)}%`, height: vH, borderRadius: 7, overflow: "hidden", background: sel ? "#0d1f3a" : "#232326", boxShadow: (sel && (selectedAvSide[c.tlId] !== "a")) ? "0 0 0 2px #e5c100" : "inset 0 0 0 1px rgba(255,255,255,0.22), 0 0 0 1px rgba(0,0,0,0.95)", cursor: locked ? "not-allowed" : "grab", opacity: tHidden ? 0.3 : 1, filter: tHidden ? "grayscale(1)" : "none" }}>
                   <div style={{ display: "flex", height: "100%" }}>
                     <div style={{ width: 42, background: c.stripUrl ? `url(${c.stripUrl}) center/cover no-repeat` : "linear-gradient(#7fa0b8,#3a5240)", flex: "none" }} />
                     {c.name && (
@@ -5811,11 +6735,11 @@ export default function Editor() {
                   <div
                     onMouseDown={(ev) => beginEdgeTrim(ev, c.tlId, "left")}
                     onClick={(ev) => ev.stopPropagation()}
-                    style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 6, cursor: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><rect x='11' y='4' width='2' height='16' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M11 9 L5 12 L11 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M13 9 L19 12 L13 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/></svg>\") 12 12, ew-resize", zIndex: 5, background: "transparent", pointerEvents: locked ? "none" : "auto" }} />
+                    style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 6, cursor: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><rect x='11' y='4' width='2' height='16' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M11 9 L5 12 L11 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M13 9 L19 12 L13 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/></svg>\") 12 12, ew-resize", zIndex: 5, background: "linear-gradient(to right, rgba(255,255,255,0.55) 0, rgba(255,255,255,0.55) 2px, transparent 2px)", pointerEvents: locked ? "none" : "auto" }} />
                   <div
                     onMouseDown={(ev) => beginEdgeTrim(ev, c.tlId, "right")}
                     onClick={(ev) => ev.stopPropagation()}
-                    style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 6, cursor: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><rect x='11' y='4' width='2' height='16' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M11 9 L5 12 L11 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M13 9 L19 12 L13 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/></svg>\") 12 12, ew-resize", zIndex: 5, background: "transparent", pointerEvents: locked ? "none" : "auto" }} />
+                    style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 6, cursor: "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><rect x='11' y='4' width='2' height='16' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M11 9 L5 12 L11 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/><path d='M13 9 L19 12 L13 15 Z' fill='%236ad04a' stroke='%23000' stroke-width='0.5'/></svg>\") 12 12, ew-resize", zIndex: 5, background: "linear-gradient(to left, rgba(255,255,255,0.55) 0, rgba(255,255,255,0.55) 2px, transparent 2px)", pointerEvents: locked ? "none" : "auto" }} />
                 </div>
               );
             })}
@@ -5904,11 +6828,13 @@ export default function Editor() {
                   onClick={(e) => clickTlClip(c.tlId, e, c.start, "a")}
                   onContextMenu={(e) => openClipMenu(e, c)}
                   onMouseDown={(e) => beginClipDrag(e, c, "a")}
-                  style={{ position: "absolute", left: `${clipToPct(audioStartOf(c))}%`, width: `${clipWidthPct(c.duration)}%`, height: aH, borderRadius: 7, overflow: "hidden", background: "#1f6b5f", boxShadow: (sel && (selectedAvSide[c.tlId] !== "v")) ? "0 0 0 2px #e5c100" : "none", cursor: locked ? "not-allowed" : "grab", opacity: aSt.mute ? 0.45 : 1 }}>
+                  style={{ position: "absolute", left: `${clipToPct(audioStartOf(c))}%`, width: `${clipWidthPct(c.duration)}%`, height: aH, borderRadius: 7, overflow: "hidden", background: "#1f6b5f", boxShadow: (sel && (selectedAvSide[c.tlId] !== "v")) ? "0 0 0 2px #e5c100" : "inset 0 0 0 1px rgba(255,255,255,0.2), 0 0 0 1px rgba(0,0,0,0.95)", cursor: locked ? "not-allowed" : "grab", opacity: aSt.mute ? 0.45 : 1 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 6px 0", fontSize: 10, color: "#cdeee7" }}>
-                    <span style={{ flex: "none", display: "inline-flex" }} title={c.avLinked === false ? "Audio getrennt (unabhängig verschiebbar)" : "Audio mit Video verknüpft"}>
-                      {c.avLinked === false ? <BrokenChainIcon /> : <ChainIcon />}
-                    </span>
+                    {!c.audioOnly && (
+                      <span style={{ flex: "none", display: "inline-flex" }} title={c.avLinked === false ? "Audio getrennt (unabhängig verschiebbar)" : "Audio mit Video verknüpft"}>
+                        {c.avLinked === false ? <BrokenChainIcon /> : <ChainIcon />}
+                      </span>
+                    )}
                     <MusicIcon />{c.name}
                   </div>
                   {/* Waveform dynamique (wavesurfer). Le SVG synthétique de base a
@@ -6287,15 +7213,35 @@ export default function Editor() {
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 40, fontSize: 13 }}>
           {TABS.map((t) => {
             const active = tab === t.id;
-            const col = active ? "#b9d94a" : "#9a9a9a";
+            // erledigt: liegt vor · naechster: sinnvoller nächster Schritt · null: keine Aussage
+            const erledigt = !fortschritt ? null
+              : t.id === "skript" ? fortschritt.drehbuch
+              : t.id === "sync" ? fortschritt.material
+              : t.id === "cut" ? fortschritt.plan
+              : null;
+            const naechster = !!fortschritt && !active && (
+              (t.id === "skript" && !fortschritt.drehbuch)
+              || (t.id === "sync" && fortschritt.drehbuch && !fortschritt.material)
+              || (t.id === "cut" && fortschritt.drehbuch && fortschritt.ausgewertet && !fortschritt.plan)
+            );
+            const col = active ? "#b9d94a" : naechster ? "#cfcfcf" : "#9a9a9a";
+            const hinweis = erledigt === true ? "Liegt vor"
+              : t.id === "skript" && erledigt === false ? "Noch kein Drehbuch. Ohne Drehbuch laufen Material und Auswertung trotzdem, nur der Schnittplan bleibt aus."
+              : t.id === "sync" && erledigt === false ? "Noch kein Material eingelesen."
+              : t.id === "cut" && erledigt === false ? "Noch kein Schnittplan. Er braucht ein Drehbuch und ausgewertetes Material."
+              : undefined;
             return (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, color: col }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: active ? 600 : 400 }}>
+              <button key={t.id} onClick={() => setTab(t.id)} title={hinweis} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 5, color: col }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: active ? 600 : 400, whiteSpace: "nowrap" }}>
+                  {t.id === "sync" && <S c={col} sw={1.7}><rect x="3" y="5" width="18" height="6" rx="1.5" /><rect x="3" y="14" width="12" height="5" rx="1.5" /><path d="M17 12v5M20 12v5" /></S>}
+                  {t.id === "skript" && <S c={col} sw={1.7}><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" /><path d="M14 3v6h6M8 13h8M8 17h6" /></S>}
                   {t.id === "cut" && <S c={col}><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M20 4L8.5 15.5M20 20L8.5 8.5" /></S>}
                   {t.id === "edit" && <S c={col} sw={1.7}><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></S>}
                   {t.id === "color" && <S c={col} sw={1.7}><path d="M12 3c4.5 0 8 3 8 7 0 3-2.5 4-4 4h-2a2 2 0 0 0-1 3.7A2 2 0 0 1 12 21a9 9 0 0 1 0-18z" /><circle cx="7.5" cy="11" r="1" /><circle cx="12" cy="7.5" r="1" /><circle cx="16.5" cy="11" r="1" /></S>}
                   {t.id === "sound" && <S c={col} sw={1.7}><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></S>}
                   {t.label}
+                  {erledigt === true && <span aria-label="liegt vor" style={{ width: 6, height: 6, borderRadius: 3, background: "#5fbf6a" }} />}
+                  {naechster && <span style={{ fontSize: 10, color: "#b9d94a", border: "1px solid #4a5a20", borderRadius: 4, padding: "0 5px" }}>als Nächstes</span>}
                 </span>
                 <span style={{ width: 34, height: 2, background: active ? "#b9d94a" : "transparent", borderRadius: 2 }} />
               </button>
@@ -6312,8 +7258,29 @@ export default function Editor() {
         </button>
         {histOpen && (
           <div style={{ position: "absolute", bottom: 54, right: 130, background: "#242426", borderRadius: 8, padding: 4, zIndex: 10, boxShadow: "0 8px 24px rgba(0,0,0,.5)", maxHeight: 260, overflowY: "auto", minWidth: 220 }}>
+            <label
+              style={{
+                padding: "8px 12px", fontSize: 12, color: "#cfcfcf", display: "block",
+                borderBottom: "1px solid #1c1c1e", cursor: "pointer", whiteSpace: "nowrap",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,.04)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              title="Einen gespeicherten Schnittplan aus einer JSON-Datei in die Timeline übernehmen"
+            >
+              <div style={{ fontWeight: 500 }}>Schnittplan aus Datei laden…</div>
+              <input
+                type="file"
+                accept=".json,application/json"
+                style={{ display: "none" }}
+                onChange={(ev) => {
+                  const f = ev.target.files?.[0];
+                  ev.target.value = "";
+                  if (f) { setHistOpen(false); void ladeSchnittplanAusDatei(f); }
+                }}
+              />
+            </label>
             {timelines.length === 0 ? (
-              <div style={{ padding: 12, fontSize: 12, color: "#7a7a7a", textAlign: "center" }}>Keine Verläufe.</div>
+              <div style={{ padding: 12, fontSize: 12, color: "#7a7a7a", textAlign: "center" }}>Keine gespeicherten Verläufe.</div>
             ) : timelines.map((t) => (
               <button
                 key={t.id}
@@ -6329,9 +7296,6 @@ export default function Editor() {
                 onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
                 <div style={{ fontWeight: 500 }}>{t.name}</div>
-                <div style={{ fontSize: 10, color: "#7a7a7a", fontFamily: "ui-monospace, monospace" }}>
-                  {t.erstellt_am ? new Date(t.erstellt_am).toLocaleString("de-DE") : "—"}
-                </div>
               </button>
             ))}
           </div>
@@ -6422,8 +7386,36 @@ export default function Editor() {
           <div>{fmtSec(trimHud.newDuration)}</div>
         </div>
       )}
+      {/* ─── Synchronisation (Validierung vor der Analyse, Vollbild-Overlay) ─── */}
+      {tab === "sync" && (
+        <div style={{
+          position: "fixed", left: 18, right: 18, top: 52, bottom: 66,
+          background: "rgba(15,15,17,0.98)", border: "1px solid #2a2a2e", borderRadius: 12, padding: 16,
+          boxShadow: "0 20px 60px rgba(0,0,0,.6)", zIndex: 90, display: "flex", flexDirection: "column",
+        }}>
+          <SyncPanel onAnalyseGestartet={(o) => {
+            void refreshClips();
+            if (o?.zuMedien) {
+              // Nach „In Medien übernehmen“: zurück in den Schnitt — die Analysen laufen sichtbar im Medien-Panel.
+              setTab("cut");
+              setAktOrdner(null);
+              if (o.anzahl) toast(`${o.anzahl} Analyse(n) laufen — Fortschritt an den Medien-Kacheln.`, "info", 3500);
+            }
+          }} />
+        </div>
+      )}
+      {/* ─── Skript & Kontext (Drehbuch → Kontext → Rohschnitt) ─── */}
+      {tab === "skript" && (
+        <div style={{
+          position: "fixed", left: 18, right: 18, top: 52, bottom: 66,
+          background: "rgba(15,15,17,0.98)", border: "1px solid #2a2a2e", borderRadius: 12, padding: 16,
+          boxShadow: "0 20px 60px rgba(0,0,0,.6)", zIndex: 90, display: "flex", flexDirection: "column",
+        }}>
+          <SkriptPanel toast={(m, a, ms) => toast(m, a ?? "info", ms)} onPlanLaden={(plan, modus) => { ladeSchnittplan(plan, modus); setTab("cut"); }} />
+        </div>
+      )}
       {/* ─── Tab-Overlays (Bearbeiten/Farbe/Ton) ─── */}
-      {tab !== "cut" && (
+      {tab !== "cut" && tab !== "sync" && tab !== "skript" && (
         <div style={{
           position: "fixed", left: 18, right: 386, bottom: 66, height: 260,
           background: "rgba(15,15,17,0.96)", backdropFilter: "blur(6px)",
@@ -6751,6 +7743,60 @@ export default function Editor() {
             </div>
             <div style={{ padding: "16px 18px", overflowY: "auto", display: "flex", flexDirection: "column", gap: 14, fontSize: 12, color: "#cfcfcf" }}>
               <section>
+                <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 8 }}>Transkription (Whisper)</div>
+                {!transkriptEinst ? <div style={{ color: "#7a7a7a" }}>Backend nicht erreichbar.</div> : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ minWidth: 130 }}>Sprache</span>
+                      <select value={transkriptEinst.sprache} onChange={(e) => setTranskriptEinst({ ...transkriptEinst, sprache: e.target.value })} style={{ flex: 1, background: "#111", color: "#cfcfcf", border: "1px solid #2a2a2e", borderRadius: 6, padding: "4px 6px" }}>
+                        <option value="de">Deutsch (fest)</option><option value="en">Englisch (fest)</option><option value="fr">Französisch (fest)</option><option value="auto">Automatisch je Datei (kippt bei kurzen Sätzen)</option>
+                      </select>
+                    </label>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                      <span style={{ minWidth: 130 }}>Glossar<br /><span style={{ color: "#7a7a7a", fontSize: 10 }}>Namen, Orte, Begriffe — Whisper übernimmt die Schreibweise</span></span>
+                      <textarea value={glossarText} onChange={(e) => setGlossarText(e.target.value)} placeholder="Yuri, Babe, Pinky Promise, …" rows={2} style={{ flex: 1, background: "#111", color: "#cfcfcf", border: "1px solid #2a2a2e", borderRadius: 6, padding: "4px 6px", fontFamily: "inherit", fontSize: 12 }} />
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ minWidth: 130 }}>Modell</span>
+                      <select value={transkriptEinst.modell} onChange={(e) => setTranskriptEinst({ ...transkriptEinst, modell: e.target.value as "turbo" | "qualitaet" })} style={{ flex: 1, background: "#111", color: "#cfcfcf", border: "1px solid #2a2a2e", borderRadius: 6, padding: "4px 6px" }}>
+                        <option value="turbo">large-v3-turbo (schnell)</option><option value="qualitaet">large-v3 (genauer, 2–3× langsamer)</option>
+                      </select>
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ minWidth: 130 }}>Tonkanal (verknüpftes WAV)</span>
+                      <select value={transkriptEinst.kanal} onChange={(e) => setTranskriptEinst({ ...transkriptEinst, kanal: e.target.value as "sprachreichster" | "record" })} style={{ flex: 1, background: "#111", color: "#cfcfcf", border: "1px solid #2a2a2e", borderRadius: 6, padding: "4px 6px" }}>
+                        <option value="sprachreichster">Kanal mit meister Sprache (VAD, z. B. Angel)</option><option value="record">Spur „Record“ (Mix)</option>
+                      </select>
+                    </label>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button onClick={() => { void saveTranskriptionEinstellungen({ ...transkriptEinst, glossar: glossarText.split(/[,\n;]+/).map((g) => g.trim()).filter(Boolean) }).then((e) => { setTranskriptEinst(e); setGlossarText(e.glossar.join(", ")); toast("Transkriptions-Einstellungen gespeichert — gelten für neue Analysen und „Neu transkribieren“.", "ok", 3000); }).catch((err) => toast((err as Error).message, "err")); }}
+                        style={{ padding: "5px 12px", borderRadius: 6, background: "#b9d94a", color: "#000", fontWeight: 600, border: "none", cursor: "pointer" }}>Speichern</button>
+                      <span style={{ color: "#7a7a7a", fontSize: 11 }}>Bereits analysierte Clips: Rechtsklick → „Neu transkribieren“.</span>
+                    </div>
+                  </div>
+                )}
+              </section>
+              <section>
+                <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 8 }}>Projekt-Kontext (Clip-Bericht)</div>
+                {projektKontext === null ? <div style={{ color: "#7a7a7a" }}>Backend nicht erreichbar.</div> : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                      <span style={{ minWidth: 130 }}>Kontext<br /><span style={{ color: "#7a7a7a", fontSize: 10 }}>Projektart, Titel, Figuren, Drehsituation — gilt im Bericht als Fakt (Genre wird sonst nicht geraten)</span></span>
+                      <textarea value={projektKontext} onChange={(e) => setProjektKontext(e.target.value)} placeholder="Kurzfilm „Pinky Promise“, Dailies vom Dreh; Figuren: Yuri, Babe; Ort: Wohnzimmer" rows={3} style={{ flex: 1, background: "#111", color: "#cfcfcf", border: "1px solid #2a2a2e", borderRadius: 6, padding: "4px 6px", fontFamily: "inherit", fontSize: 12 }} />
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ minWidth: 130 }}>Max. Sprecher je Clip<br /><span style={{ color: "#7a7a7a", fontSize: 10 }}>Diarization-Obergrenze (2 bei Zwei-Personen-Szenen); leer = frei</span></span>
+                      <input type="number" min={1} max={20} value={projektMaxSprecher} onChange={(e) => setProjektMaxSprecher(e.target.value)} placeholder="frei" style={{ width: 80, background: "#111", color: "#cfcfcf", border: "1px solid #2a2a2e", borderRadius: 6, padding: "4px 6px" }} />
+                    </label>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button onClick={() => { void saveProjektEinstellungen({ kontext: projektKontext, max_sprecher: projektMaxSprecher ? Number(projektMaxSprecher) : null }).then((e) => { setProjektKontext(e.kontext); setProjektMaxSprecher(e.max_sprecher ? String(e.max_sprecher) : ""); toast("Projekt-Einstellungen gespeichert — Kontext wirkt bei „Neu generieren“, Sprecher-Limit bei neuen Analysen.", "ok", 3500); }).catch((err) => toast((err as Error).message, "err")); }}
+                        style={{ padding: "5px 12px", borderRadius: 6, background: "#b9d94a", color: "#000", fontWeight: 600, border: "none", cursor: "pointer" }}>Speichern</button>
+                      <span style={{ color: "#7a7a7a", fontSize: 11 }}>Bericht: Clip → Analyse → „Bericht“ → „Neu generieren“.</span>
+                    </div>
+                  </div>
+                )}
+              </section>
+              <section>
                 <div style={{ fontSize: 11, color: "#8a8a8a", marginBottom: 8 }}>Wiedergabe</div>
                 <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
                   <span style={{ minWidth: 130 }}>Lautstärke</span>
@@ -6825,6 +7871,38 @@ export default function Editor() {
       )}
 
       {/* ─── Menu contextuel (#3) — clip / en-tête / zone vide ─── */}
+      {ordnerBrowserOffen && (
+        <OrdnerBrowser typ="video" onSchliessen={() => setOrdnerBrowserOffen(false)}
+          onWahl={(pfad) => {
+            setOrdnerBrowserOffen(false);
+            importOrdnerInMedien(pfad, aktOrdner, true).then((r) => {
+              refreshOrdner();
+              // Import läuft asynchron (Celery) → auf das Job-Ende hören und dann Clips + Ordner neu laden.
+              connectJobWs(r.job_id, (u) => { if (u.status === "fertig" || u.status === "fehler") { void refreshClips(); refreshOrdner(); } });
+            }).catch((e) => window.alert((e as Error).message));
+          }} />
+      )}
+      {ordnerWahl && (
+        <div onClick={() => setOrdnerWahl(null)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 380, maxHeight: "70vh", overflowY: "auto", background: "#161617", border: "1px solid #2a2a2e", borderRadius: 12, padding: 14, color: "#cfcfcf", fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+            <b style={{ color: "#b9d94a" }}>{ordnerWahl.clipIds.length} Clip(s) verschieben nach …</b>
+            {(() => {
+              const zeilen: { id: string | null; name: string; tiefe: number }[] = [{ id: null, name: "Medien (Wurzel)", tiefe: 0 }];
+              const walk = (eltern: string | null, tiefe: number) => {
+                ordnerListe.filter((o) => o.id && (o.eltern_id ?? null) === eltern).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+                  .forEach((o) => { zeilen.push({ id: o.id, name: o.name, tiefe }); walk(o.id, tiefe + 1); });
+              };
+              walk(null, 1);
+              return zeilen.map((z) => (
+                <button key={z.id ?? "root"} onClick={() => { void verschiebeClips(ordnerWahl.clipIds, z.id); setOrdnerWahl(null); }}
+                  style={{ textAlign: "left", background: z.id === aktOrdner ? "#2a2f1e" : "#242426", border: "1px solid #2a2a2e", borderRadius: 6, padding: "6px 10px", paddingLeft: 10 + z.tiefe * 14, color: "#cfcfcf", cursor: "pointer" }}>
+                  {z.tiefe > 0 ? "└ " : ""}{z.name}
+                </button>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
       {contextMenu && (
         <div data-context-menu
           style={{ position: "fixed", left: contextMenu.x, top: contextMenu.y, zIndex: 400, background: "#242426", borderRadius: 8, padding: 4, minWidth: 200, boxShadow: "0 10px 30px rgba(0,0,0,.6)", border: "1px solid #313134" }}>

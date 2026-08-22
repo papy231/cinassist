@@ -24,6 +24,9 @@ interface ProposalState {
   registerExecutor: (ex: TimelineCommandExecutor | null) => void;
 
   addProposal: (input: Omit<Proposal, "id" | "createdAt" | "status">) => Proposal;
+  /** Wendet die Proposal PROBEWEISE an (Timeline spielt sie, NICHTS gespeichert). Annehmen behält,
+   *  Ablehnen/Verwerfen stellt den vorherigen Zustand exakt wieder her. Nur eine Vorschau gleichzeitig. */
+  previewProposal: (id: string) => void;
   acceptProposal: (id: string) => void;
   rejectProposal: (id: string) => void;
   removeProposal: (id: string) => void;
@@ -31,6 +34,9 @@ interface ProposalState {
 
   getPending: () => Proposal[];
 }
+
+let previewBackup: unknown = null;          // Timeline-Zustand VOR der laufenden Vorschau (opak, vom Executor)
+let previewingId: string | null = null;
 
 export const useProposalStore = create<ProposalState>((set, get) => ({
   proposals: [],
@@ -49,10 +55,40 @@ export const useProposalStore = create<ProposalState>((set, get) => ({
     return proposal;
   },
 
+  previewProposal: (id) => {
+    const { proposals, executor } = get();
+    const p = proposals.find((x) => x.id === id);
+    if (!p || p.status !== "pending" || !executor) return;
+    // Eine andere Vorschau läuft? → erst exakt zurückstellen (wieder pending)
+    if (previewingId && previewingId !== id && previewBackup != null) {
+      executor.restoreState(previewBackup);
+      const altId = previewingId;
+      set((s) => ({ proposals: s.proposals.map((x) => (x.id === altId ? { ...x, status: "pending" } : x)) }));
+    }
+    previewBackup = executor.captureState();
+    previewingId = id;
+    executor.executeBatch(p.edits, `${p.title} (Vorschau)`);
+    set((s) => ({ proposals: s.proposals.map((x) => (x.id === id ? { ...x, status: "previewing" } : x)) }));
+  },
+
   acceptProposal: (id) => {
     const { proposals, executor } = get();
     const p = proposals.find((x) => x.id === id);
     if (!p) return;
+    const istSequenz = p.edits.some((e) => e.type === "loadSequence" && e.replace);
+    // Erst ANNEHMEN speichert eine Sequenz als Fassung im Backend — Vorschau/pending nie. Verzögert,
+    // damit React den angewandten Zustand gerendert hat und der frisch registrierte Executor ihn sieht.
+    const speichern = () => {
+      if (istSequenz) setTimeout(() => get().executor?.persist?.(p.title), 450);
+    };
+    if (p.status === "previewing") {
+      // Vorschau läuft bereits auf der Timeline → nur festschreiben
+      previewBackup = null;
+      previewingId = null;
+      set((s) => ({ proposals: s.proposals.map((x) => (x.id === id ? { ...x, status: "accepted" } : x)) }));
+      speichern();
+      return;
+    }
     if (p.status !== "pending") return;
     if (!executor) {
       console.warn("[proposals] no executor registered, cannot apply proposal", id);
@@ -62,12 +98,21 @@ export const useProposalStore = create<ProposalState>((set, get) => ({
     set((s) => ({
       proposals: s.proposals.map((x) => (x.id === id ? { ...x, status: "accepted" } : x)),
     }));
+    speichern();
   },
 
-  rejectProposal: (id) =>
+  rejectProposal: (id) => {
+    const { proposals, executor } = get();
+    const p = proposals.find((x) => x.id === id);
+    if (p && p.status === "previewing" && executor && previewBackup != null) {
+      executor.restoreState(previewBackup);      // Timeline exakt zurück auf den Stand vor der Vorschau
+      previewBackup = null;
+      previewingId = null;
+    }
     set((s) => ({
       proposals: s.proposals.map((x) => (x.id === id ? { ...x, status: "rejected" } : x)),
-    })),
+    }));
+  },
 
   removeProposal: (id) =>
     set((s) => ({

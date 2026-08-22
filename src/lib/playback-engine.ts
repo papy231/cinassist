@@ -305,10 +305,81 @@ export class VideoPool {
 
 // ─── The engine (clock + resolver + pool) ──────────────────────────
 
+/**
+ * AudioPool — one detached <audio> element per audio-only source (music, voice
+ * files). Same doctrine as the video pool: the element FOLLOWS the master clock
+ * (`t` → currentTime), it never drives it. While playing we let the element run
+ * and only re-seek past a drift threshold; while paused we pin currentTime.
+ * Elements that are not active at `t` are paused.
+ */
+class AudioPool {
+  private elems = new Map<string, HTMLAudioElement>();
+  private driftThreshold: number;
+
+  constructor(driftThreshold: number) {
+    this.driftThreshold = driftThreshold;
+  }
+
+  private get(src: string): HTMLAudioElement {
+    let a = this.elems.get(src);
+    if (!a) {
+      a = document.createElement("audio");
+      a.preload = "auto";
+      a.src = src;
+      a.crossOrigin = "anonymous";
+      this.elems.set(src, a);
+    }
+    return a;
+  }
+
+  /** Preload sources (called from warmPool). */
+  warm(srcs: string[]) {
+    for (const s of srcs) this.get(s);
+    for (const [src, a] of this.elems) if (!srcs.includes(src)) { a.pause(); a.removeAttribute("src"); a.load(); this.elems.delete(src); }
+  }
+
+  /**
+   * Drive one source for this tick. `wantSec` = wanted source time; `playing` =
+   * master clock state; `volume` = master × fade × gain (0..1); `muted` = track/master mute.
+   */
+  drive(src: string, wantSec: number, playing: boolean, volume: number, muted: boolean) {
+    const a = this.get(src);
+    a.muted = muted;
+    a.volume = Math.max(0, Math.min(1, volume));
+    if (!playing) {
+      if (!a.paused) a.pause();
+      if (a.readyState >= 1 && Math.abs(a.currentTime - wantSec) > 0.03) a.currentTime = wantSec;
+      return;
+    }
+    if (a.paused) {
+      a.currentTime = wantSec;
+      a.play().catch(() => {});
+      return;
+    }
+    if (a.readyState >= 2 && Math.abs(a.currentTime - wantSec) > this.driftThreshold) a.currentTime = wantSec;
+  }
+
+  /** Pause every element not in `keep` (sources active at this tick). */
+  pauseOthers(keep: Set<string>) {
+    for (const [src, a] of this.elems) if (!keep.has(src) && !a.paused) a.pause();
+  }
+
+  pauseAll() {
+    for (const a of this.elems.values()) if (!a.paused) a.pause();
+  }
+
+  destroy() {
+    for (const a of this.elems.values()) { a.pause(); a.removeAttribute("src"); a.load(); }
+    this.elems.clear();
+  }
+}
+
+
 export class PlaybackEngine {
   private timeline: EngineTimeline;
   private clock: MasterClock;
   private pool: VideoPool;
+  private audioPool: AudioPool;
 
   /** Drift threshold (seconds) beyond which the <video> is re-seeked.
    *  Too small = constant re-seeks (stutter). ~0.15s is a good start. */
@@ -349,6 +420,7 @@ export class PlaybackEngine {
     this.timeline = timeline;
     this.clock = new MasterClock(timeline.fps);
     this.pool = new VideoPool(container);
+    this.audioPool = new AudioPool(this.driftThreshold);
     this.pool.onError = (err) => this.onError(err);
     this.pool.onSlotReady = (src) => this.onSlotReady(src);
     this.clock.onTick = (frame) => this.render(frame);
@@ -360,10 +432,12 @@ export class PlaybackEngine {
   private warmPool() {
     const seen = new Set<string>();
     const clips: Array<{ src: string; sourceInSec: number }> = [];
+    const audioSrcs: string[] = [];
     for (const track of this.timeline.tracks) {
       for (const clip of track.clips) {
         if (!clip.src || seen.has(clip.src)) continue;
         seen.add(clip.src);
+        if (clip.audioOnly) { audioSrcs.push(clip.src); continue; }   // → AudioPool, kein <video>-Slot
         clips.push({
           src: clip.src,
           sourceInSec: framesToSeconds(clip.sourceIn, this.fps),
@@ -371,6 +445,7 @@ export class PlaybackEngine {
       }
     }
     this.pool.warm(clips);
+    this.audioPool.warm(audioSrcs);
   }
 
   get fps() {
@@ -394,6 +469,7 @@ export class PlaybackEngine {
   pause() {
     this.clock.pause();
     this.pool.active?.pause();
+    this.audioPool.pauseAll();
   }
 
   seek(frame: Frames) {
@@ -471,6 +547,7 @@ export class PlaybackEngine {
   destroy() {
     this.clock.pause();
     this.pool.destroy();
+    this.audioPool.destroy();
   }
 
   /**
@@ -479,9 +556,8 @@ export class PlaybackEngine {
    * seek is a pure opacity swap on an already-decoded element. Zero load
    * latency (subject to browser memory limits).
    *
-   * Multi-track: video tracks are stored top-priority first (index 0 = V1 =
-   * highest priority). We walk them in order and the FIRST visible track with a
-   * clip at `t` wins (Premiere/simple convention). Hidden tracks are skipped;
+   * Multi-track: index 0 = V1 (unterste Spur). Gewinner ist die OBERSTE sichtbare
+   * Spur mit einem Clip bei `t` (V2 über V1 — wie jede NLE, wie die UI zeichnet). Hidden tracks are skipped;
    * if ANY track is soloed, only soloed tracks are considered (solo overrides
    * hide). Audio: only the winning track's <video> is unmuted (single source).
    *
@@ -496,7 +572,10 @@ export class PlaybackEngine {
 
     let active: ActiveClip | null = null;
     let winningTrackId: string | null = null;
-    for (const track of videoTracks) {
+    // NLE-Konvention (wie in der UI gezeichnet): die OBERE Spur gewinnt — V2 liegt über V1. Die Spuren sind
+    // index 0 = V1 (unten) … n = oberste; wir gehen daher von oben (höchster Index) nach unten.
+    for (let k = videoTracks.length - 1; k >= 0; k--) {
+      const track = videoTracks[k];
       const st = this.trackStates.get(track.id);
       if (st?.hidden) continue; // hidden track → skip
       if (anySoloed && !st?.solo) continue; // solo overrides everything else
@@ -504,15 +583,18 @@ export class PlaybackEngine {
       if (clip) {
         active = clip;
         winningTrackId = track.id;
-        break; // top-most (lowest index) wins
+        break; // oberste Spur mit Clip gewinnt
       }
     }
 
     if (!active) {
       // real timeline gap (or all tracks hidden) → intentional black + silence
+      // (audio-only tracks — music, voice files — keep playing through the AudioPool)
       this.pool.hideActive();
       this.pool.setAudio(null, { volume: this.masterVolume, muted: this.masterMuted });
       this.lastDriftMs = null;
+      this.audioFallthrough = null;
+      this.mixAudioOnly(t);
       this.onFrame(t);
       return;
     }
@@ -527,10 +609,33 @@ export class PlaybackEngine {
     const trackMuted = winningTrackId
       ? !!this.trackStates.get(winningTrackId)?.mute
       : false;
-    this.pool.setAudio(trackMuted ? null : wantSrc, {
+    // Video-only clip (cutaway): its embedded audio stays muted; the sound comes from an audio track (AudioPool).
+    const videoOnly = !!active.clip.videoOnly;
+    this.pool.setAudio(trackMuted || videoOnly ? null : wantSrc, {
       volume: this.masterVolume,
       muted: this.masterMuted,
     });
+    // ── Audio-Fallthrough: ein stummer Overlay (Alternative/Cutaway auf V2+) gewinnt nur das BILD.
+    // Der TON kommt weiter von der obersten darunterliegenden sichtbaren Spur mit Ton — sonst macht ein
+    // Alternativen-Stapel die ganze Timeline stumm (Nutzer-Befund 20.08.). Getrieben über den AudioPool
+    // (eigenes <audio>-Element pro src, positions-synchron), NICHT über den Video-Slot-Pool.
+    this.audioFallthrough = null;
+    if ((trackMuted || videoOnly) && winningTrackId) {
+      for (let k = videoTracks.length - 1; k >= 0; k--) {
+        const track = videoTracks[k];
+        if (track.id === winningTrackId) continue;
+        const st = this.trackStates.get(track.id);
+        if (st?.hidden || st?.mute) continue;
+        if (anySoloed && !st?.solo) continue;
+        const c = resolveClipAt(track, t);
+        if (!c || c.clip.videoOnly || !c.clip.src) continue;
+        const fadeMult = computeFadeMultiplier(t, c.clip);
+        const gainMult = c.clip.gainDb != null && c.clip.gainDb !== 0 ? Math.pow(10, c.clip.gainDb / 20) : 1;
+        this.audioFallthrough = { src: c.clip.src, sec: framesToSeconds(c.sourceFrame, this.fps),
+                                  vol: this.masterVolume * fadeMult * gainMult };
+        break;
+      }
+    }
 
     if (srcChanged && this.clock.playing) {
       this.pool.active?.play().catch(() => {});
@@ -569,7 +674,43 @@ export class PlaybackEngine {
       }
     }
 
+    this.mixAudioOnly(t);
     this.onFrame(t);
+  }
+
+  /**
+   * Audio-only clips (music/voice files) on the audio tracks: for every audio
+   * track resolve the clip at `t`; if it is audio-only, drive its <audio> from
+   * the clock (volume = master × fade × gain, mute = track/master). Everything
+   * else in the AudioPool is paused. Video-borne audio stays single-source via
+   * the VideoPool — this only adds what no <video> slot can play.
+   */
+  /** Fallthrough-Tonquelle des aktuellen Frames (Master unter einem stummen Overlay) — von render() gesetzt,
+   *  von mixAudioOnly() mitgefahren, damit pauseOthers() sie nicht abwürgt. */
+  private audioFallthrough: { src: string; sec: number; vol: number } | null = null;
+
+  private mixAudioOnly(t: Frames) {
+    const keep = new Set<string>();
+    if (this.audioFallthrough) {
+      keep.add(this.audioFallthrough.src);
+      this.audioPool.drive(this.audioFallthrough.src, this.audioFallthrough.sec, this.clock.playing,
+        this.audioFallthrough.vol, this.masterMuted);
+    }
+    for (const track of this.timeline.tracks) {
+      if (track.kind !== "audio") continue;
+      const active = resolveClipAt(track, t);
+      if (!active || !active.clip.audioOnly || !active.clip.src) continue;
+      const st = this.trackStates.get(track.id);
+      const wantSec = framesToSeconds(active.sourceFrame, this.fps);
+      const fadeMult = computeFadeMultiplier(t, active.clip);
+      const gainMult = active.clip.gainDb != null && active.clip.gainDb !== 0
+        ? Math.pow(10, active.clip.gainDb / 20)
+        : 1;
+      keep.add(active.clip.src);
+      this.audioPool.drive(active.clip.src, wantSec, this.clock.playing,
+        this.masterVolume * fadeMult * gainMult, this.masterMuted || !!st?.mute);
+    }
+    this.audioPool.pauseOthers(keep);
   }
 }
 

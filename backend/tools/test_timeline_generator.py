@@ -1,13 +1,13 @@
-"""CLI de test end-to-end pour le générateur timeline-from-prompt.
+"""Durchgängiger Test der Timeline-Erzeugung über die Kommandozeile.
 
-Enchaîne Phase 1 (plan_timeline) + Phase 2 (retrieve_candidates) sur la DB réelle
-et écrit tous les logs sous outputs/timeline_gen_logs/{run_id}/.
+Verkettet Phase 1 (plan_timeline) und Phase 2 (retrieve_candidates) auf der echten Datenbank
+und schreibt sämtliche Protokolle nach outputs/timeline_gen_logs/{run_id}/.
 
 Usage:
     python -m backend.tools.test_timeline_generator \\
         --prompt "90s über die Einsamkeit des Kochs" --duration 90
 
-Par défaut utilise TOUS les clips analysés. Pour restreindre :
+Voreingestellt werden ALLE ausgewerteten Clips genutzt. Zum Einschränken:
     --clip-ids uuid1,uuid2
 """
 
@@ -48,7 +48,7 @@ async def run(prompt: str, duration_s: float, num_slots_hint: int | None,
 
     project_ids = await _get_project_clip_ids(clip_ids)
     if not project_ids:
-        print("ERROR: aucun clip analysé dans la DB", file=sys.stderr)
+        print("FEHLER: kein ausgewerteter Clip in der Datenbank", file=sys.stderr)
         return 2
     print(f"→ pool: {len(project_ids)} clips analysés", file=sys.stderr)
 
@@ -85,7 +85,7 @@ async def run(prompt: str, duration_s: float, num_slots_hint: int | None,
     print(f"→ pool_size={candidates['_meta']['pool_size']}, "
           f"wall={candidates['_meta']['wall_s']}s", file=sys.stderr)
 
-    # Résumé lisible
+    # Lesbare Zusammenfassung
     print("\n=== ZUSAMMENFASSUNG PRO SLOT ===", file=sys.stderr)
     empty_slots = 0
     for slot in slots:
@@ -120,7 +120,7 @@ async def run(prompt: str, duration_s: float, num_slots_hint: int | None,
               file=sys.stderr)
 
     print(f"\n→ logs: backend/outputs/timeline_gen_logs/{run_id}/", file=sys.stderr)
-    # stdout minimal pour scripting
+    # knappe Standardausgabe zur Weiterverarbeitung
     print(json.dumps({
         "run_id": run_id,
         "slots": len(slots),
@@ -140,7 +140,7 @@ def main() -> int:
                     help="Comma-separated clip UUIDs (default = all analyzed clips)")
     ap.add_argument("--top-k", type=int, default=5)
     ap.add_argument("--no-dedupe", action="store_true",
-                    help="Autorise qu'une scène apparaisse dans plusieurs slots")
+                    help="Erlaubt, dass eine Szene in mehreren Slots erscheint")
     ap.add_argument("--assemble-mode", choices=("heuristic", "llm"),
                     default="heuristic",
                     help="heuristic = top-1 + centre (rapide), llm = qwen picke")

@@ -1,24 +1,24 @@
-"""Baselines pour la comparaison quantitative du générateur timeline-from-prompt.
+"""Vergleichsverfahren für die quantitative Auswertung der Timeline-Erzeugung.
 
-Chaque baseline produit un triplet (plan, candidates, timeline) STRUCTURELLEMENT
-compatible avec ceux du pipeline principal (`backend/core/timeline_generator.py`)
-afin que `backend/evaluation/metrics.compute_all` calcule les mêmes métriques.
+Jede Vergleichsstrecke liefert ein Tripel (plan, candidates, timeline), das im AUFBAU
+im selben Format wie die Hauptstrecke (`backend/core/timeline_generator.py`),
+damit `backend/evaluation/metrics.compute_all` dieselben Maße berechnet.
 
-Baselines implémentées
+Umgesetzte Vergleichsverfahren
 ──────────────────────
-- **random_pick** : ignore complètement le prompt, tire des scènes au hasard
-  jusqu'à couvrir la durée cible. Baseline « floor » qui montre ce qu'apporte
-  déjà le simple respect de la durée.
-- **top1_no_filter** : plan LLM identique au pipeline principal, mais retrieve
-  SANS filtres durs (framing/speaker/dialogue) — on prend juste le meilleur
-  score CLIP+BM25 par slot, sans dédup. Baseline « pré-filtres » qui isole
-  la contribution des filtres durs et de la déduplication.
-- **single_shot_llm_direct** : un seul call qwen qui reçoit le pool compact
-  et le prompt, et produit directement les picks (pas de Plan → Retrieve →
-  Assemble). Baseline « pré-décomposition » qui montre ce qu'apporte
+- **random_pick**: ignoriert die Anfrage vollständig und zieht Szenen zufällig,
+  bis die Zieldauer erreicht ist. Untere Schranke; zeigt, welcher Anteil eines
+  Ergebnisses allein durch die Einhaltung der Dauer entsteht.
+- **top1_no_filter**: dieselbe Zerlegung durch das Sprachmodell wie in der Hauptstrecke, der Abruf erfolgt aber
+  OHNE harte Filter für Einstellungsgröße, Sprecher und Dialog; genommen wird schlicht der beste
+  Rangwert aus CLIP und BM25 je Slot, ohne Entdopplung. Isoliert den Beitrag
+  der harten Filter und der Vermeidung von Wiederholungen.
+- **single_shot_llm_direct**: ein einziger Aufruf des Sprachmodells erhält den
+  gekürzten Bestand und die Anfrage und gibt die Auswahl unmittelbar aus, ohne
+  Planung, Abruf und Zusammenstellung. Isoliert den Beitrag
   l'architecture en 3 phases.
 
-Toutes les baselines retournent le même dict-triplet :
+Alle Vergleichsverfahren geben dasselbe Dreier-Wörterbuch zurück:
     {"plan": {...}, "candidates": {...}, "timeline": {...},
      "pool_summary_wall_s": float}
 """
@@ -55,7 +55,7 @@ from backend.core.timeline_generator import (
 def _empty_plan_slot(slot_id: int, duration_s: float,
                      intent_de: str = "", intent_en: str = "",
                      framing_hint: str = "any") -> dict:
-    """Slot dummy pour les baselines qui n'ont pas de vrai plan LLM."""
+    """Platzhalter-Slot für Verfahren ohne echte Zerlegung durch das Sprachmodell."""
     return {
         "slot_id": slot_id,
         "intent_de": intent_de,
@@ -71,7 +71,7 @@ def _empty_plan_slot(slot_id: int, duration_s: float,
 
 def _segment_from_pick(pick: dict, slot: dict, target_duration: float,
                         trim_start: float, trim_strategy: str) -> tuple[dict, dict]:
-    """Fabrique (segment, decision) au format attendu par les métriques."""
+    """Erzeugt (Segment, Entscheidung) in dem Format, das die Maße erwarten."""
     media_start = float(pick.get("start_zeit") or 0.0) + trim_start
     segment = {
         "clip_path": pick["clip_path"],
@@ -102,11 +102,11 @@ def _segment_from_pick(pick: dict, slot: dict, target_duration: float,
 
 async def run_baseline_random_pick(user_prompt: str, duration_s: float,
                                    clip_ids: list[str], seed: int = 42) -> dict:
-    """Baseline « floor » : ignore le prompt, tire au hasard jusqu'à couvrir
-    la durée cible. Utilise seulement les scènes avec `clip_embedding` (comme
-    le pipeline principal) pour être comparable.
+    """Untere Schranke: ignoriert die Anfrage und zieht zufällig, bis die Zieldauer
+    erreicht ist. Verwendet wie die Hauptstrecke nur Szenen mit `clip_embedding`,
+    damit der Vergleich trägt.
 
-    Aucun filtre framing/speaker/dialogue, aucun scoring — pur random.
+    Kein Filter für Einstellungsgröße, Sprecher oder Dialog, keine Bewertung, reiner Zufall.
     """
     t_pool = time.time()
     async with AsyncSessionLocal() as db:
@@ -134,7 +134,7 @@ async def run_baseline_random_pick(user_prompt: str, duration_s: float,
         if scene_dauer <= 0:
             continue
         remaining = duration_s - accumulated
-        # Cible : min(scene_dauer, remaining, 8s) mais au moins 2s
+        # Zielwert: min(scene_dauer, remaining, 8 s), mindestens jedoch 2 s
         target = max(2.0, min(scene_dauer, remaining, 8.0))
         slot = _empty_plan_slot(slot_id, target)
         plan_slots.append(slot)
@@ -142,7 +142,7 @@ async def run_baseline_random_pick(user_prompt: str, duration_s: float,
         candidate = _scene_to_candidate(0.0, 0.0, 0.0, scene)
         candidates_slots[str(slot_id)] = [candidate]
 
-        # Trim centré (baseline ne fait pas de smart_trim)
+        # Mittiger Zuschnitt; das Vergleichsverfahren nutzt keinen klugen Zuschnitt
         if scene_dauer > target:
             trim_start = (scene_dauer - target) / 2.0
         else:
@@ -202,11 +202,11 @@ async def run_baseline_random_pick(user_prompt: str, duration_s: float,
 async def run_baseline_top1_no_filter(user_prompt: str, duration_s: float,
                                        clip_ids: list[str],
                                        num_slots_hint: int | None = None) -> dict:
-    """Plan LLM identique (avec pool_summary), retrieve SANS filtres durs et
-    SANS dédup — pur top-1 hybride CLIP+BM25 par slot. Ensuite assemble
-    heuristic (top-1 + trim centré).
+    """Gleiche Zerlegung wie die Hauptstrecke, Abruf jedoch OHNE harte Filter und
+    OHNE Entdopplung: reiner bester Treffer aus CLIP und BM25 je Slot,
+    anschließend regelbasierte Zusammenstellung mit mittigem Zuschnitt.
 
-    Isole la contribution des filtres durs framing/speaker/dialogue + du dédup.
+    Isoliert den Beitrag der harten Filter und der Vermeidung von Wiederholungen.
     """
     t_pool = time.time()
     async with AsyncSessionLocal() as db:
@@ -217,13 +217,12 @@ async def run_baseline_top1_no_filter(user_prompt: str, duration_s: float,
     plan = await plan_timeline(user_prompt, duration_s, num_slots_hint,
                                pool_summary=pool_summary)
 
-    # Phase 2 : retrieve custom (contourne les filtres durs)
+    # Phase 2: eigener Abruf, der die harten Filter umgeht
     async with AsyncSessionLocal() as db:
         candidates = await _retrieve_no_filter(plan, clip_ids, db, top_k=1)
 
-    # Phase 3 : assemble heuristic manuel (top-1 + trim centré, sans smart_trim
-    # sophistiqué — pour vraiment isoler la contribution de smart_trim, on
-    # utilise le fallback centré uniquement).
+    # Phase 3: einfache Zusammenstellung, bester Treffer mit mittigem Zuschnitt.
+    # Der kluge Zuschnitt bleibt bewusst aus, damit sein Beitrag isolierbar ist.
     t_asm = time.time()
     slots_c = candidates.get("slots") or {}
     segments: list[dict] = []
@@ -269,8 +268,9 @@ async def run_baseline_top1_no_filter(user_prompt: str, duration_s: float,
 
 async def _retrieve_no_filter(plan: dict, project_clip_ids: list[str],
                                db: AsyncSession, top_k: int = 1) -> dict:
-    """Copie de retrieve_candidates SANS filtres durs et SANS dédup. Utilise
-    quand même le scoring hybride CLIP+BM25 pour rester comparable.
+    """Abwandlung von retrieve_candidates ohne harte Filter und ohne Entdopplung.
+    Der gemischte Rangwert aus CLIP und BM25 bleibt erhalten, damit der
+    Vergleich trägt.
     """
     import numpy as np
     from rank_bm25 import BM25Okapi
@@ -379,10 +379,10 @@ Antworte AUSSCHLIESSLICH mit gültigem JSON:
 
 def _compact_pool_for_single_shot(pool: list[Szene],
                                     max_scenes: int = 80) -> tuple[str, list[Szene]]:
-    """Rendu texte compact du pool pour injection dans le prompt LLM.
+    """Kurzfassung des Bestands als Text für die Übergabe an das Sprachmodell.
 
-    Retourne (text, ordered_pool) : ordered_pool est la liste des scènes dans
-    l'ordre affiché — les picks du LLM référencent leur index dans cette liste.
+    Zurück kommt (text, ordered_pool); ordered_pool ist die Liste der Szenen in der
+    angezeigten Reihenfolge, die Auswahl des Sprachmodells verweist auf deren Positionen.
     """
     lines: list[str] = []
     sorted_pool = sorted(
@@ -413,8 +413,8 @@ async def run_baseline_single_shot_llm(user_prompt: str, duration_s: float,
                                         clip_ids: list[str],
                                         max_scenes_in_prompt: int = 80,
                                         temperature: float = 0.3) -> dict:
-    """Un seul call qwen : pool compact + prompt → picks directs. Pas de Plan,
-    pas de Retrieve, pas de contraintes framing/speaker/dialogue.
+    """Ein einziger Aufruf von qwen: knapper Bestand und Eingabe, unmittelbare Auswahl. Keine Zerlegung,
+    kein Abruf, keine Bedingungen für Einstellungsgröße, Sprecher oder Dialog.
     """
     t_pool = time.time()
     async with AsyncSessionLocal() as db:
@@ -458,7 +458,7 @@ async def run_baseline_single_shot_llm(user_prompt: str, duration_s: float,
         error = str(e)
         llm_wall = time.time() - t_llm
 
-    # Reconstruit plan / candidates / timeline compatibles avec compute_all
+    # Baut plan, candidates und timeline so auf, dass compute_all damit rechnen kann
     plan_slots: list[dict] = []
     candidates_slots: dict[str, list[dict]] = {}
     segments: list[dict] = []
@@ -470,7 +470,7 @@ async def run_baseline_single_shot_llm(user_prompt: str, duration_s: float,
     for i, p in enumerate(picks, 1):
         if not isinstance(p, dict):
             continue
-        # Accepte scene_idx (nouveau, index dans ordered_pool) et scene_id (legacy, UUID)
+        # Nimmt scene_idx (Index im geordneten Bestand) und scene_id (UUID) entgegen
         scene = None
         raw_idx = p.get("scene_idx")
         if raw_idx is not None:
@@ -573,10 +573,10 @@ BASELINE_MODES = {
 
 async def run_baseline(mode: str, user_prompt: str, duration_s: float,
                        clip_ids: list[str]) -> dict:
-    """Dispatcher pour lancer une baseline depuis run_benchmark.
+    """Verteiler zum Starten eines Vergleichsverfahrens aus run_benchmark.
 
-    Retourne un triplet {plan, candidates, timeline, pool_summary,
-    pool_summary_wall_s} compatible avec `M.compute_all`.
+    Zurück kommt ein Tripel {plan, candidates, timeline, pool_summary,
+    pool_summary_wall_s} im Format von `M.compute_all`.
     """
     if mode == "baseline_random":
         return await run_baseline_random_pick(user_prompt, duration_s, clip_ids)

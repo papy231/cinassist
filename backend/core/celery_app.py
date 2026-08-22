@@ -7,7 +7,7 @@ celery_app = Celery(
     "cinassist",
     broker=CELERY_BROKER_URL,
     backend=CELERY_RESULT_BACKEND,
-    include=["backend.workers.ingest", "backend.workers.export"],
+    include=["backend.workers.ingest", "backend.workers.export", "backend.workers.sync", "backend.workers.kontext"],
 )
 
 celery_app.conf.update(

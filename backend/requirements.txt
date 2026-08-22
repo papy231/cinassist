@@ -36,3 +36,13 @@ httpx==0.27.2
 # Gemini läuft via httpx (kein extra Paket nötig)
 anthropic>=0.40.0
 openai>=1.50.0
+silero-vad>=5.1
+
+# ─── Retrieval / Export / Diarisierung ───
+#   rank_bm25      → core/timeline_generator.py (Top-Level-Import)
+#   opentimelineio → core/otio_export.py        (Top-Level-Import)
+#   pyannote.audio → core/diarize.py            (Lazy-Import)
+# Versionen mit `pip freeze` festschreiben, sobald installiert.
+rank-bm25
+OpenTimelineIO
+pyannote.audio

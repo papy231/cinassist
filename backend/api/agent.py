@@ -1,25 +1,28 @@
 """
-CinAssist — Agent ReAct (Vague 1.4)
+CinAssist, handelnder Assistent nach dem ReAct-Muster.
 
-Endpoint : POST /api/agent/run — streaming SSE d'un agent conversationnel
-qui décompose une intention en langage naturel en une chaîne de tool calls.
+Endpunkt: POST /api/agent/run, ein per SSE gestromter Gesprächsassistent,
+der eine in natürlicher Sprache formulierte Absicht in eine Kette von
+Werkzeugaufrufen zerlegt.
 
-Modèle : qwen2.5:14b en local via Ollama (format=json pour parsing fiable).
+Modell: qwen2.5:14b lokal über Ollama, Ausgabeformat JSON für verlässliches
+Auslesen.
 
-Architecture :
-    - Loop ReAct classique : thought → action → observation → loop
-    - Chaque tool = coroutine async(args, db) -> dict
-    - Streaming SSE : chaque étape (thought/action/observation/done) est
-      poussée au frontend en temps réel
+Aufbau:
+    - Übliche ReAct-Schleife: Überlegung, Handlung, Beobachtung, zurück
+    - Jedes Werkzeug ist eine Koroutine async(args, db) -> dict
+    - Über SSE wird jeder Schritt (thought, action, observation, done)
+      unmittelbar an die Oberfläche gereicht
 
-Ce MVP expose 4 tools pour valider l'orchestration ; on ajoutera face
-detection / diarization / assemblage / export au fur et à mesure des
-Vagues 1.2 → 1.6.
+Die erste Fassung stellte vier Werkzeuge bereit, um das Zusammenspiel zu
+prüfen; Gesichtserkennung, Sprechertrennung, Zusammenstellung und Ausgabe
+kamen nach und nach hinzu.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import tempfile
 import time
@@ -43,9 +46,51 @@ logger = logging.getLogger("cinassist.agent")
 router = APIRouter(prefix="/api/agent", tags=["Agent"])
 
 # ─── Config ──────────────────────────────────────────────────
-AGENT_MODEL = "qwen2.5:14b"
+from backend.api import agent_kontext_tools as _kx
+
+AGENT_MODEL = os.environ.get("CINASSIST_AGENT_MODEL", "qwen2.5:14b")
+AGENT_NATIVE_TOOLS = os.environ.get("CINASSIST_AGENT_NATIVE", "1") != "0"   # /api/chat mit tools statt JSON-Prompt
 MAX_ITERATIONS = 12
 TEMPERATURE = 0.2
+
+
+def _json_schema_fuer(tool: "Tool") -> dict:
+    """Tool.args_schema ("typ — beschreibung") → JSON-Schema fürs native Tool-Calling."""
+    props = {}
+    for name, besch in tool.args_schema.items():
+        t = besch.split("—")[0].strip().lower()
+        typ = ("array" if t.startswith("list") else "integer" if t.startswith("int") else
+               "number" if t.startswith("float") else "boolean" if t.startswith("bool") else "string")
+        eintrag: dict = {"type": typ, "description": besch}
+        if typ == "array":
+            eintrag["items"] = {"type": "object"} if "dict" in t else {"type": "string"}
+        props[name] = eintrag
+    return {"type": "function", "function": {"name": tool.name, "description": tool.description[:900],
+                                             "parameters": {"type": "object", "properties": props}}}
+
+
+def _kompakt_obs(observation):
+    """Große Observation-Felder fürs LLM-Kontextfenster kompaktieren (Frontend bekommt weiter alles)."""
+    if not isinstance(observation, dict):
+        return observation
+    _HEAVY = ("segments", "segments_preview", "decisions", "candidates",
+              "candidates_summary", "plan", "beat_times_s", "commands", "eintraege", "transkript", "beat_spans")
+    if "commands" in observation:
+        return {**{k: v for k, v in observation.items() if k not in _HEAVY},
+                "n_commands": len(observation.get("commands") or [])}
+    if isinstance(observation.get("eintraege"), list):
+        return {**{k: v for k, v in observation.items() if k not in _HEAVY},
+                "n_eintraege": len(observation.get("eintraege") or []),
+                "eintraege_kompakt": [
+                    f"Nr{e['nr']} Sz{e['szene']} {e.get('einstellung')} T{e.get('take')} {e['in_s']:.0f}–{e['out_s']:.0f}s B{e.get('beats')} — {(e.get('grund') or '')[:140]}"
+                    for e in (observation.get("eintraege") or [])[:40]]}
+    if "transkript" in observation or "beat_spans" in observation:
+        return {**{k: v for k, v in observation.items() if k not in _HEAVY},
+                "transkript_kompakt": [
+                    f"{z['t']:.0f}s {z.get('art')} Z{z.get('zeile')} {z.get('text')}" for z in (observation.get("transkript") or [])[:40]],
+                "beat_spans_kompakt": [
+                    f"B{sp['beat']} {sp['start']:.0f}–{sp['end']:.0f}s ev={sp.get('evidenz')}" for sp in (observation.get("beat_spans") or [])]}
+    return {k: v for k, v in observation.items() if k not in _HEAVY}
 
 
 # ─── Tool infrastructure ─────────────────────────────────────
@@ -58,7 +103,7 @@ class Tool:
 
 
 async def _tool_list_clips(args: dict, db: AsyncSession) -> dict:
-    """Liste tous les clips uploadés avec leurs métadonnées de base."""
+    """Listet alle hochgeladenen Clips mit ihren Grunddaten auf."""
     result = await db.execute(
         select(Clip).options(selectinload(Clip.szenen))
     )
@@ -78,7 +123,7 @@ async def _tool_list_clips(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_search_scenes_by_prompt(args: dict, db: AsyncSession) -> dict:
-    """CLIP text search sur toutes les scènes avec embedding."""
+    """Textsuche mit CLIP über alle Szenen, die eine Einbettung besitzen."""
     query = args.get("query", "")
     limit = int(args.get("limit", 5))
     if not query:
@@ -120,7 +165,7 @@ async def _tool_search_scenes_by_prompt(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_list_speakers(args: dict, db: AsyncSession) -> dict:
-    """Liste tous les speakers identifiés dans le projet (label auto + rename manuel)."""
+    """Listet alle erkannten Sprecher des Projekts auf, mit automatischer und ggf. manuell vergebener Benennung."""
     from sqlalchemy import func
     stmt = select(Speaker, Clip.dateiname).join(Clip, Clip.id == Speaker.clip_id).order_by(Speaker.total_speaking_time.desc())
     result = await db.execute(stmt)
@@ -143,13 +188,13 @@ async def _tool_list_speakers(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_filter_by_speaker(args: dict, db: AsyncSession) -> dict:
-    """Retourne les scènes où un speaker donné (par label_manual ou label_auto) apparaît."""
+    """Gibt die Szenen zurück, in denen ein bestimmter Sprecher auftritt, gefunden über label_manual oder label_auto."""
     name = (args.get("speaker") or "").strip()
     if not name:
         return {"error": "speaker (name) is required"}
     limit = int(args.get("limit") or 20)
 
-    # Résoudre le speaker par label_manual OU label_auto (case-insensitive)
+    # Sprecher über label_manual ODER label_auto auflösen, Groß- und Kleinschreibung egal
     from sqlalchemy import or_, func
     sp_stmt = select(Speaker).where(
         or_(
@@ -200,7 +245,7 @@ async def _tool_filter_by_speaker(args: dict, db: AsyncSession) -> dict:
 async def _tool_rename_speaker(args: dict, db: AsyncSession) -> dict:
     """Renomme un speaker : label_auto (SPEAKER_00) → label_manual ('Anna').
 
-    Accepte soit un UUID, soit un label_auto ("SPEAKER_00") comme identifiant.
+    Als Kennung wird entweder eine UUID oder ein label_auto ("SPEAKER_00") angenommen.
     """
     from sqlalchemy import func, or_
 
@@ -212,7 +257,7 @@ async def _tool_rename_speaker(args: dict, db: AsyncSession) -> dict:
     if _UUID_RE.match(raw_id):
         result = await db.execute(select(Speaker).where(Speaker.id == raw_id))
     else:
-        # Résoudre par label_auto ou label_manual (case-insensitive)
+        # Über label_auto oder label_manual auflösen, Groß- und Kleinschreibung egal
         result = await db.execute(select(Speaker).where(or_(
             func.lower(Speaker.label_auto) == raw_id.lower(),
             func.lower(Speaker.label_manual) == raw_id.lower(),
@@ -221,8 +266,8 @@ async def _tool_rename_speaker(args: dict, db: AsyncSession) -> dict:
     if not speakers:
         return {"error": f"speaker '{raw_id}' not found (neither UUID nor label match)"}
     if len(speakers) > 1:
-        # Ambigu — plusieurs clips ont un SPEAKER_00 : renomme TOUS (comportement voulu ?)
-        # Pour ne pas surprendre, on remonte les candidats et on refuse.
+        # Mehrdeutig: mehrere Clips führen ein SPEAKER_00, es werden ALLE umbenannt
+        # Um keine Überraschung zu erzeugen, werden die Kandidaten gemeldet und der Aufruf abgelehnt.
         return {
             "error": f"ambiguous speaker '{raw_id}': matches {len(speakers)} rows across clips",
             "candidates": [
@@ -245,7 +290,7 @@ async def _tool_rename_speaker(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_filter_by_framing(args: dict, db: AsyncSession) -> dict:
-    """Filtre les scènes par framing (extreme_closeup, closeup, medium, wide_with_person, wide_no_person). Accepte str ou list[str]."""
+    """Filtert Szenen nach Einstellungsgröße (extreme_closeup, closeup, medium, wide_with_person, wide_no_person). Nimmt str oder list[str]."""
     framing_arg = args.get("framing") or ""
     min_faces = int(args.get("min_faces") or 0)
     limit = int(args.get("limit") or 20)
@@ -291,14 +336,14 @@ async def _tool_filter_by_framing(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_export_scenes(args: dict, db: AsyncSession) -> dict:
-    """Exporte une sélection de scènes OU des segments custom en FCPXML/OTIO.
+    """Gibt eine Auswahl von Szenen ODER eigene Segmente als FCPXML oder OTIO aus.
 
-    Le fichier est écrit dans ~/Documents/CinAssist_Exports/ et peut être
-    importé dans Premiere Pro, Final Cut Pro X, DaVinci Resolve.
+    Die Datei landet in ~/Documents/CinAssist_Exports/ und lässt sich in
+    Premiere Pro, Final Cut Pro X und DaVinci Resolve einlesen.
 
     Deux modes :
-      - scene_ids : exporte les scènes complètes de la DB (ordre respecté)
-      - segments  : exporte des segments custom (produits par remove_silences,
+      - scene_ids: gibt die vollständigen Szenen aus der Datenbank aus, Reihenfolge bleibt erhalten
+      - segments: gibt eigene Segmente aus, wie sie remove_silences,
                     generate_story, generate_timeline_from_prompt, etc.)
     """
     scene_ids = args.get("scene_ids") or []
@@ -363,10 +408,10 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 
 async def _resolve_clip_ids(db: AsyncSession, ids_or_names) -> list[str]:
-    """Résout une liste mixte d'UUIDs et de noms de fichiers en UUIDs uniquement.
+    """Führt eine gemischte Liste aus UUIDs und Dateinamen auf reine UUIDs zurück.
 
-    - Si l'entrée est un UUID valide → passe tel quel.
-    - Sinon → recherche par `dateiname ILIKE %name%` en DB.
+    - Ist der Eintrag eine gültige UUID, bleibt er unverändert.
+    - Andernfalls wird in der Datenbank über `dateiname ILIKE %name%` gesucht.
     """
     if isinstance(ids_or_names, str):
         ids_or_names = [ids_or_names]
@@ -380,7 +425,7 @@ async def _resolve_clip_ids(db: AsyncSession, ids_or_names) -> list[str]:
         if _UUID_RE.match(s):
             out.append(s)
             continue
-        # Recherche par nom
+        # Suche über den Namen
         r = await db.execute(
             select(Clip.id).where(Clip.dateiname.ilike(f"%{s}%"))
         )
@@ -425,7 +470,7 @@ async def _tool_remove_silences(args: dict, db: AsyncSession) -> dict:
     if not scene_ids and not clip_ids:
         return {"error": "either scene_ids or clip_ids is required"}
 
-    # Résoudre noms de clips → UUIDs
+    # Clip-Namen zu UUIDs auflösen
     if clip_ids:
         clip_ids = await _resolve_clip_ids(db, clip_ids)
         if not clip_ids:
@@ -438,9 +483,9 @@ async def _tool_remove_silences(args: dict, db: AsyncSession) -> dict:
     result = remove_silences_from_scenes(
         scenes, min_silence_ms=min_silence_ms, keep_margin_ms=keep_margin_ms
     )
-    # On garde `segments` complet dans le return (le frontend proxy en a besoin
-    # pour construire les deleteRange précis). Le prompt LLM tronque de toute
-    # façon les observations à 2000 chars → pas de pollution du context.
+    # `segments` bleibt in der Rückgabe vollständig, weil die Oberfläche sie braucht,
+    # um die genauen deleteRange-Angaben zu bauen). Die Eingabe an das Sprachmodell kürzt
+    # Beobachtungen ohnehin auf 2000 Zeichen, der Kontext bleibt also sauber.
     out = result.copy()
     out["segment_count"] = len(out["segments"])
     out["segments_preview"] = out["segments"][:5]
@@ -458,7 +503,7 @@ async def _tool_find_hesitations(args: dict, db: AsyncSession) -> dict:
     scene_ids = args.get("scene_ids")
     clip_ids = args.get("clip_ids")
     if not scene_ids and not clip_ids:
-        # Défaut : tous les clips analysés
+        # Voreinstellung: alle ausgewerteten Clips
         r = await db.execute(select(Clip.id).where(Clip.status == "analysiert"))
         clip_ids = [str(c) for (c,) in r.all()]
         if not clip_ids:
@@ -472,22 +517,22 @@ async def _tool_find_hesitations(args: dict, db: AsyncSession) -> dict:
 
 
 # ─── Stash für Segmente zwischen Tool-Calls ─────────────────
-# L'agent produit des segments avec remove_silences/generate_story/
-# generate_timeline_from_prompt puis les passe à export_scenes/render_video.
-# Persistance à 2 niveaux :
-#   - RAM : lookup rapide pour l'itération courante (perdue au restart)
-#   - DB `timelines` : persistant, survit au restart, permet reprise ultérieure
+# Der Assistent erzeugt Segmente mit remove_silences, generate_story oder
+# generate_timeline_from_prompt weiter an export_scenes oder render_video.
+# Ablage auf zwei Ebenen:
+#   - Arbeitsspeicher: schneller Zugriff im laufenden Durchgang, geht beim Neustart verloren
+#   - Tabelle `timelines`: dauerhaft, übersteht den Neustart, erlaubt späteres Weiterarbeiten
 _SEGMENT_STASH: dict[str, list[dict]] = {}
 _STASH_TIMELINE_PREFIX = "_stash:"  # nom en DB : "_stash:last"
 
 
 async def _stash_write(stash_id: str, segments: list[dict], db: AsyncSession) -> None:
-    """Écrit en RAM + persist dans la table timelines (name = '_stash:{id}')."""
+    """Schreibt in den Arbeitsspeicher und dauerhaft in die Tabelle timelines (name = '_stash:{id}')."""
     from backend.core.database import Timeline
     _SEGMENT_STASH[stash_id] = segments
     total = sum(float(s.get("duration", 0)) for s in segments)
     name = f"{_STASH_TIMELINE_PREFIX}{stash_id}"
-    # Upsert : cherche timeline existante par nom, sinon crée
+    # Einfügen oder aktualisieren: vorhandene Zeitleiste über den Namen suchen, sonst anlegen
     r = await db.execute(select(Timeline).where(Timeline.name == name))
     tl = r.scalar_one_or_none()
     payload = {
@@ -504,7 +549,7 @@ async def _stash_write(stash_id: str, segments: list[dict], db: AsyncSession) ->
 
 
 async def _stash_read(stash_id: str, db: AsyncSession) -> list[dict] | None:
-    """Lit d'abord la RAM, puis la DB si absent."""
+    """Liest zuerst den Arbeitsspeicher, bei Fehlanzeige die Datenbank."""
     from backend.core.database import Timeline
     if stash_id in _SEGMENT_STASH:
         return _SEGMENT_STASH[stash_id]
@@ -671,7 +716,7 @@ async def _tool_generate_story(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_render_video(args: dict, db: AsyncSession) -> dict:
-    """Rend un MP4 depuis des segments avec aspect ratio et optional subtitles burnt."""
+    """Rechnet aus Segmenten ein MP4, mit Seitenverhältnis und wahlweise eingebrannten Untertiteln."""
     from backend.core.render import render_mp4, _srt_from_whisper_segments
 
     stash_id = args.get("stash_id", "last")
@@ -685,9 +730,9 @@ async def _tool_render_video(args: dict, db: AsyncSession) -> dict:
 
     srt_str: str | None = None
     if burn_subs:
-        # Concatène les segments Whisper de toutes les scènes utilisées, réalignés
-        # sur la timeline finale (offset cumulatif de chaque segment).
-        # On charge les scènes correspondantes en DB via src_scene_id.
+        # Fügt die Whisper-Segmente aller verwendeten Szenen zusammen, neu ausgerichtet
+        # auf die endgültige Zeitleiste, über den aufsummierten Versatz je Segment.
+        # Die zugehörigen Szenen werden über src_scene_id aus der Datenbank geladen.
         scene_ids = [s.get("src_scene_id") for s in segments if s.get("src_scene_id")]
         srt_pieces: list[str] = []
         cumulative = 0.0
@@ -701,7 +746,7 @@ async def _tool_render_video(args: dict, db: AsyncSession) -> dict:
                     raw = sc.transkription_json
                     if isinstance(raw, dict):
                         raw = raw.get("segmente") or raw.get("segments") or []
-                    # Filter segments qui tombent dans [media_start, media_start+duration]
+                    # Nur Segmente behalten, die in [media_start, media_start+duration] fallen
                     seg_start = seg["media_start"]
                     seg_end = seg_start + seg["duration"]
                     speech: list[dict] = []
@@ -710,7 +755,7 @@ async def _tool_render_video(args: dict, db: AsyncSession) -> dict:
                             ws = float(w.get("start", 0))
                             we = float(w.get("end", 0))
                             if we > seg_start and ws < seg_end:
-                                # Décale à la timeline finale
+                                # Auf die endgültige Zeitleiste verschieben
                                 speech.append({
                                     "start": max(0, ws - seg_start),
                                     "end": max(0, we - seg_start),
@@ -741,7 +786,7 @@ async def _tool_detect_beats(args: dict, db: AsyncSession) -> dict:
     clip_id = args.get("clip_id") or args.get("clip_name")
     if not clip_id:
         return {"error": "clip_id (UUID) or clip_name is required"}
-    # Résoudre nom → UUID si nécessaire
+    # Falls nötig, Namen zu UUID auflösen
     resolved = await _resolve_clip_ids(db, [clip_id])
     if not resolved:
         return {"error": f"clip '{clip_id}' not found (neither UUID nor filename match)"}
@@ -759,12 +804,12 @@ async def _tool_detect_beats(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_rediarize_clip(args: dict, db: AsyncSession) -> dict:
-    """Refait la diarization d'un clip avec des hints (num_speakers, min_speaker_time).
+    """Wiederholt die Sprechertrennung eines Clips mit Vorgaben (num_speakers, min_speaker_time).
 
-    Utile quand pyannote sur-segmente : ex. MLK "I Have A Dream" détecté avec
-    3 speakers alors qu'il n'y a qu'un orateur → passe `num_speakers=1`.
+    Nützlich, wenn pyannote zu fein trennt, etwa MLK "I Have A Dream" erkannt mit
+    drei Sprechern, obwohl nur einer redet; dann hilft `num_speakers=1`.
 
-    Remplace en DB les rows Speaker/SceneSpeaker existantes du clip.
+    Ersetzt die vorhandenen Speaker- und SceneSpeaker-Zeilen des Clips in der Datenbank.
     """
     from sqlalchemy import delete as sql_delete
     from backend.core.database import SceneSpeaker as SS, Speaker as SP
@@ -789,7 +834,7 @@ async def _tool_rediarize_clip(args: dict, db: AsyncSession) -> dict:
     min_speaker_time_s = float(args.get("min_speaker_time_s") or 3.0)
 
     # Extract audio to a temp WAV mono 16kHz (pyannote-friendly)
-    # NamedTemporaryFile évite le TOCTOU race de mktemp() deprecated.
+    # NamedTemporaryFile vermeidet das Zeitfenster-Problem des veralteten mktemp().
     from backend.core.config import TEMP_DIR
     with tempfile.NamedTemporaryFile(prefix="cinassist_rediarize_", suffix=".wav",
                                      dir=str(TEMP_DIR), delete=False) as tf:
@@ -837,7 +882,7 @@ async def _tool_rediarize_clip(args: dict, db: AsyncSession) -> dict:
         speaker_by_label[label] = sp
     await db.flush()
 
-    # Réassigne scene_speakers
+    # scene_speakers neu zuordnen
     r2 = await db.execute(
         select(Szene).where(Szene.clip_id == clip_id).order_by(Szene.szenen_nr)
     )
@@ -870,12 +915,12 @@ async def _tool_rediarize_clip(args: dict, db: AsyncSession) -> dict:
 
 
 async def _tool_retranscribe_clip(args: dict, db: AsyncSession) -> dict:
-    """Refait la transcription Whisper d'un clip existant avec language=auto.
+    """Wiederholt die Whisper-Transkription eines vorhandenen Clips mit language=auto.
 
-    Utile après le fix language=None : les clips ingérés avant ont été forcés
-    en 'de' et les vidéos EN (Snowden, MLK) n'avaient pas de transcription.
-    Met à jour transkription + transkription_json des scènes overlapping avec
-    les segments Whisper. Ne touche pas au reste (CLIP, faces, speakers).
+    Nützlich nach der Umstellung auf language=None: zuvor eingelesene Clips wurden auf
+    'de' festgelegt, weshalb die englischen Videos (Snowden, MLK) ohne Transkription blieben.
+    Aktualisiert transkription und transkription_json aller Szenen, die sich mit
+    überschneiden. Alles Übrige bleibt unangetastet (CLIP, Gesichter, Sprecher).
     """
     from backend.core.config import WHISPER_MODEL, TEMP_DIR
     import subprocess, os
@@ -892,9 +937,9 @@ async def _tool_retranscribe_clip(args: dict, db: AsyncSession) -> dict:
     if not clip or not clip.dateipfad:
         return {"error": f"clip {clip_id} has no file path"}
 
-    language = args.get("language")  # None → auto-detect (recommandé)
+    language = args.get("language")  # None bedeutet automatische Erkennung, empfohlen
 
-    # Pré-check : le clip a-t-il de l'audio ?
+    # Vorprüfung: besitzt der Clip überhaupt eine Tonspur?
     probe = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "a",
          "-show_entries", "stream=codec_type", "-of", "csv=p=0", clip.dateipfad],
@@ -949,7 +994,7 @@ async def _tool_retranscribe_clip(args: dict, db: AsyncSession) -> dict:
         ],
     } for seg in result.get("segments", [])]
 
-    # Mettre à jour les szenen : trouver chaque overlap
+    # Szenen aktualisieren, dazu jede Überschneidung suchen
     r2 = await db.execute(select(Szene).where(Szene.clip_id == clip_id).order_by(Szene.szenen_nr))
     scenes = r2.scalars().all()
     updated = 0
@@ -1000,7 +1045,7 @@ async def _tool_cluster_speakers_across_clips(args: dict, db: AsyncSession) -> d
     if len(rows) < 2:
         return {"error": "mindestens 2 Speaker mit Redezeit erforderlich"}
 
-    # Pour chaque speaker, trouve la scene où il parle le plus longtemps
+    # Zu jedem Sprecher die Szene suchen, in der er am längsten spricht
     speakers_info: list[dict] = []
     for sp, dateiname, dateipfad in rows:
         if not dateipfad:
@@ -1022,7 +1067,7 @@ async def _tool_cluster_speakers_across_clips(args: dict, db: AsyncSession) -> d
             "clip_name": dateiname,
             "clip_path": dateipfad,
             "start_s": float(sc.start_zeit),
-            "duration_s": min(float(sc.dauer), 20.0),  # max 20s pour l'embedding
+            "duration_s": min(float(sc.dauer), 20.0),  # höchstens 20 s für die Einbettung
             "label_auto": sp.label_auto,
             "label_manual": sp.label_manual,
         })
@@ -1033,11 +1078,11 @@ async def _tool_cluster_speakers_across_clips(args: dict, db: AsyncSession) -> d
     result = cluster_speakers(speakers_info, TEMP_DIR, similarity_threshold=threshold)
 
     if apply_labels and "clusters" in result:
-        # Applique le suggested_label comme label_manual à tous les speakers du cluster
+        # suggested_label als label_manual auf alle Sprecher der Gruppe anwenden
         renamed = 0
         for cluster in result["clusters"]:
             if cluster["speaker_count"] < 2:
-                continue  # Ne pas renommer les speakers seuls
+                continue  # Alleinstehende Sprecher nicht umbenennen
             new_label = cluster["suggested_label"]
             for sid in cluster["speaker_ids"]:
                 r3 = await db.execute(select(Speaker).where(Speaker.id == sid))
@@ -1283,19 +1328,119 @@ TOOLS: dict[str, Tool] = {
         },
         handler=_tool_export_last_cleanup,
     ),
+    # ── Kontext-Schicht (Drehbuch/Beats/Schnittplan) — Wissen ──
+    "get_script_overview": Tool(
+        name="get_script_overview",
+        description="ERSTE WAHL bei Projektfragen: Drehbuch-Überblick — Szenen mit Beat-/Take-Zahl und Bildprüfungs-Status, Figuren-Mapping (Skript↔Film), aktueller Schnittplan (Name, Dauer, Lücken).",
+        args_schema={},
+        handler=_kx.tool_get_script_overview,
+    ),
+    "get_scene_context": Tool(
+        name="get_scene_context",
+        description="Eine Szene im Detail: Beats (Szenen-Takt), welche Takes welchen Beat mit welcher Evidenz belegen (Beat-Matrix), Plan-Segmente dieser Szene mit Gründen, Lücken.",
+        args_schema={"szene": "str — Szenennummer, z. B. '2'"},
+        handler=_kx.tool_get_scene_context,
+    ),
+    "get_take_details": Tool(
+        name="get_take_details",
+        description="Ein Take im Detail: Klappe, Spielfenster, Transkript (aligniert, mit Zeiten), bestätigte Skript-Aktionen, wer im Bild ist (Gesichter), Beat-Spans.",
+        args_schema={"take": "str — Dateiname, Clip-UUID oder Kurzform „2.1 T4“"},
+        handler=_kx.tool_get_take_details,
+    ),
+    "get_plan": Tool(
+        name="get_plan",
+        description="Der aktuelle Schnittplan: jedes Segment mit Quelle (Szene/Einstellung/Take), Zeiten, Beats, GRUND und BELEGEN — damit lässt sich jede Schnitt-Entscheidung erklären. Plus Lücken (nicht gedrehte/ausgelassene Zeilen).",
+        args_schema={"plan_id": "str — optional, sonst der neueste Plan", "szene": "str — optional: nur diese Szene (empfohlen bei Detailfragen)"},
+        handler=_kx.tool_get_plan,
+    ),
+    "search_transcripts": Tool(
+        name="search_transcripts",
+        description="Sucht einen gesagten Satz/Ausdruck in allen Take-Transkripten (über alle Szenen, mit Zeitstempel). Für „wo sagt sie …?“.",
+        args_schema={"query": "str — gesuchter Wortlaut", "szene": "str — optional, auf eine Szene begrenzen"},
+        handler=_kx.tool_search_transcripts,
+    ),
+    # ── Kontext-Schicht — Handeln (immer Vorschlag + Geister-Vorschau, nie Direkt-Anwendung) ──
+    "edit_timeline": Tool(
+        name="edit_timeline",
+        description=("Schlägt konkrete Timeline-Bearbeitungen vor (der Nutzer akzeptiert/verwirft im Editor). "
+                     "commands = Liste von Kommandos: "
+                     "{type:'trim', tlId, side:'left'|'right', delta:±s} kürzt/verlängert einen Clip · "
+                     "{type:'deleteRange', from,to, ripple:true} schneidet einen Zeitbereich raus · "
+                     "{type:'delete', tlIds:[…], ripple:true} löscht Clips · "
+                     "{type:'split', at} schneidet · {type:'move', tlId, newStart} · "
+                     "{type:'insert', clipId, at, videoTrackIndex, mode:'insert'} fügt einen Quell-Clip ein · "
+                     "{type:'setFade', tlId, side:'in'|'out', duration} · {type:'setGain', tlId, gainDb} · "
+                     "{type:'addMarker', at, label}. tlIds stehen im Timeline-Kontext oben."),
+        args_schema={"commands": "list[dict] — Timeline-Kommandos (s. Beschreibung)", "titel": "str — kurzer Titel des Vorschlags"},
+        handler=_kx.tool_edit_timeline,
+    ),
+    "regenerate_schnittplan": Tool(
+        name="regenerate_schnittplan",
+        description="Lässt den echten Beat-Planer (Drehbuch → Beats → beste Quelle je Beat) laufen und schlägt die neue Timeline vor (ersetzt die aktuelle nach Akzeptieren). Dauert 30–90 s. modus: rohschnitt (länger, mehr Material) | feinschnitt (dicht, Cutaways/Reaktionen).",
+        args_schema={"modus": "str — rohschnitt | feinschnitt", "name": "str — optionaler Plan-Name"},
+        handler=_kx.tool_regenerate_schnittplan,
+    ),
+    "lege_sequenzen_chronologisch": Tool(
+        name="lege_sequenzen_chronologisch",
+        description=("Chronologische Sichtungs-Fassung: je EINSTELLUNG jeder Szene ein Segment (bester Take — Takes derselben "
+                     "Einstellung sind Wiederholungen), Klappe/Einrichten und Ausstieg fallen weg, Szenen/Teile in Skript-Reihenfolge; "
+                     "Szenen ohne Dialog: ein Segment je Motiv. Für den dramaturgischen Schnitt (Beats, Coverage, Cutaways) "
+                     "stattdessen regenerate_schnittplan nehmen. Vorschlag, ersetzt die Timeline."),
+        args_schema={"max_s_pro_szene": "float — optionale Obergrenze je Szene in Sekunden (Default: ganzes Spielfenster)"},
+        handler=_kx.tool_lege_sequenzen_chronologisch,
+    ),
+    "lege_alternativen": Tool(
+        name="lege_alternativen",
+        description=("Stapelt die besten Passagen ANDERER Takes als stumme ALTERNATIVEN auf V2/V3 über den aktuellen "
+                     "Schnitt — am jeweiligen Beat ausgerichtet. Der Nutzer vergleicht per Spur-Ausblenden und behält die beste. "
+                     "Für „zeig mir Alternativen (für Szene N / Beat M)“. Additiv, ersetzt NICHTS."),
+        args_schema={"szene": "str — optional: nur diese Szene", "beat": "int — optional: nur dieser Beat",
+                     "max_pro_beat": "int — wie viele Spuren je Beat (Default 2 = V2+V3)"},
+        handler=_kx.tool_lege_alternativen,
+    ),
+    "swap_beat_source": Tool(
+        name="swap_beat_source",
+        description="Tauscht im aktuellen Schnittplan die QUELLE eines Beats (z. B. „zeig B3 der Szene 2 aus 2.1 T2 statt 2.1 T4“) und schlägt die geänderte Timeline vor. Beat-Nummern und belegende Takes liefert get_scene_context.",
+        args_schema={"szene": "str — Szenennummer", "beat": "int — Beat-Nummer", "take": "str — Ziel-Take (Dateiname oder „2.1 T2“)"},
+        handler=_kx.tool_swap_beat_source,
+    ),
 }
 
 
 # ─── System prompt ───────────────────────────────────────────
-def _build_system_prompt(timeline_state: dict | None = None) -> str:
+WISSENS_TOOLS = ("get_script_overview", "get_scene_context", "get_take_details", "get_plan", "search_transcripts",
+                 "list_clips", "search_scenes_by_prompt", "list_speakers")
+EDIT_TOOLS = ("edit_timeline", "swap_beat_source", "regenerate_schnittplan", "lege_sequenzen_chronologisch", "lege_alternativen")
+
+
+def _aktive_tool_namen(modus: str | None) -> set[str]:
+    if modus == "frage":
+        return set(WISSENS_TOOLS)
+    if modus == "edit":
+        return set(WISSENS_TOOLS[:6]) | set(EDIT_TOOLS)
+    return set(TOOLS.keys())
+
+
+def _build_system_prompt(timeline_state: dict | None = None, projekt: dict | None = None,
+                         modus: str | None = None, nativ: bool = False) -> str:
+    """modus: "frage" → nur Wissens-Tools · "edit" → Wissens- + Handeln-Tools · None → alle.
+    Aufbau: STATISCHES zuerst (Identität, Format, Tools, Regeln, Projekt), VOLATILES (Timeline-Snapshot,
+    Stil) ans Ende — so bleibt der Prompt-Präfix über Schritte und Nachrichten identisch und Ollama kann
+    den KV-Cache wiederverwenden, statt jedes Mal alles neu zu verarbeiten."""
+    if modus == "frage":
+        aktive = [t for n, t in TOOLS.items() if n in WISSENS_TOOLS]
+    elif modus == "edit":
+        aktive = [t for n, t in TOOLS.items() if n in WISSENS_TOOLS[:6] or n in EDIT_TOOLS]
+    else:
+        aktive = list(TOOLS.values())
     tools_desc = []
-    for t in TOOLS.values():
-        args_str = ", ".join(f"{k}: {v}" for k, v in t.args_schema.items()) or "aucun"
+    for t in aktive:
+        args_str = ", ".join(f"{k}: {v}" for k, v in t.args_schema.items()) or "keine"
         tools_desc.append(f"- {t.name}({args_str})\n    {t.description}")
     tools_block = "\n".join(tools_desc)
 
-    # Snapshot de la timeline actuelle (envoyé par le frontend). Permet à l'agent
-    # de raisonner sur "aktueller Clip", "V1", "der erste Clip" sans avoir à
+    # Abbild der aktuellen Zeitleiste, von der Oberfläche geschickt. Der Assistent kann damit
+    # über "aktueller Clip", "V1" oder "der erste Clip" urteilen, ohne
     # appeler list_clips systématiquement.
     tl_block = ""
     if timeline_state and isinstance(timeline_state, dict):
@@ -1307,12 +1452,12 @@ def _build_system_prompt(timeline_state: dict | None = None) -> str:
         selected_ids = timeline_state.get("selectedTlIds") or []
         if clips:
             def _resolve_current_clips() -> list[dict]:
-                # Priorité 1 : les clips sélectionnés (selectedTlIds)
+                # Erste Wahl: die ausgewählten Clips (selectedTlIds)
                 if selected_ids:
                     sel = [c for c in clips if c.get("tlId") in selected_ids]
                     if sel:
                         return sel
-                # Priorité 2 : le clip sous le playhead (piste vidéo de priorité la + haute)
+                # Zweite Wahl: der Clip unter dem Abspielkopf, auf der obersten Bildspur
                 at_ph = [
                     c for c in clips
                     if c.get("start", 0) <= playhead <= c.get("start", 0) + c.get("duration", 0)
@@ -1340,7 +1485,7 @@ def _build_system_prompt(timeline_state: dict | None = None) -> str:
                 name = c.get("name") or c.get("clipId") or "?"
                 marker = " ← SELECTED" if c.get("tlId") in selected_ids else ""
                 lines.append(
-                    f"  - V{int(v_idx)+1}: {name} @ {start:.2f}s → {start+dur:.2f}s (dur {dur:.2f}s, clipId={c.get('clipId')}){marker}"
+                    f"  - V{int(v_idx)+1}: {name} @ {start:.2f}s → {start+dur:.2f}s (dur {dur:.2f}s, tlId={c.get('tlId')}, clipId={c.get('clipId')}){marker}"
                 )
             more = f"\n  … ({len(clips) - 40} weitere Clips)" if len(clips) > 40 else ""
             tl_block = (
@@ -1356,8 +1501,8 @@ def _build_system_prompt(timeline_state: dict | None = None) -> str:
             )
 
     # ── Stil-Präferenzen (Nutzerprofil persistiert per localStorage) ──
-    # Le frontend inclut `style_prefs` dans le timeline_state s'ils sont définis.
-    # Format attendu (tous optionnels) :
+    # Die Oberfläche legt `style_prefs` in den timeline_state, sofern gesetzt.
+    # Erwartetes Format, alle Felder freigestellt:
     #   { language, target_duration_sec, cutting_style, framing_mix,
     #     auto_cleanup_silences, auto_remove_hesitations, min_scene_duration_sec }
     style_block = ""
@@ -1398,20 +1543,39 @@ def _build_system_prompt(timeline_state: dict | None = None) -> str:
                     + "\n".join(style_lines)
                 )
 
-    return f"""Du bist CinAssist, ein KI-Agent für Video-Postproduktion. Du hilfst Profi-Cuttern, Routinearbeiten zu automatisieren (Sichtung/Dérushage, Plansuche, Cleanup, Rohschnitt).{tl_block}{style_block}
+    projekt_block = ""
+    if projekt:
+        fig = ", ".join(f"{f['skript']}={f['film']}" for f in (projekt.get("figuren") or []) if f.get("film"))
+        plan = projekt.get("aktueller_plan") or {}
+        sz = ", ".join(str(x.get("nummer")) for x in (projekt.get("szenen") or []))
+        projekt_block = (
+            "\n\n=== Projekt-Kontext (Kontext-Schicht) ===\n"
+            f"Drehbuch: „{projekt.get('titel')}“ ({projekt.get('skript_sprache')}, Dreh auf {projekt.get('dreh_sprache')}) · Szenen: {sz}\n"
+            + (f"Figuren (Skript=Film): {fig}\n" if fig else "")
+            + (f"Aktueller Schnittplan: „{plan.get('name')}“ ({plan.get('modus')}, {plan.get('eintraege')} Segmente, "
+               f"{plan.get('dauer_s')} s, {plan.get('luecken')} Lücken)\n" if plan else "Noch KEIN Schnittplan erzeugt.\n")
+            + "Detailfragen dazu beantworten die Tools get_script_overview / get_scene_context / get_take_details / get_plan / search_transcripts."
+        )
 
-Du antwortest AUSSCHLIESSLICH in gültigem JSON, niemals Freitext außerhalb des JSON.
+    if nativ:
+        format_block = """Nutze die bereitgestellten Tools (Function-Calling). Wenn du genug weißt, antworte dem Nutzer DIREKT als normalen Text (kein JSON, kein Tool-Aufruf) — IMMER AUF DEUTSCH, egal in welcher Sprache gefragt wurde (außer eine Stil-Präferenz legt eine andere Sprache fest)."""
+    else:
+        format_block = f"""Du antwortest AUSSCHLIESSLICH in gültigem JSON, niemals Freitext außerhalb des JSON.
 
 Pflichtformat jeder Antwort:
 {{
   "thought": "deine Überlegung in einem kurzen deutschen Satz",
   "action": "tool_name" oder "done",
   "args": {{ … Argumente des Tools (Schema einhalten) … }},
-  "final_answer": "finale Antwort an den Nutzer auf Deutsch (NUR wenn action=done)"
+  "final_answer": "finale Antwort an den Nutzer (NUR wenn action=done) — IMMER AUF DEUTSCH, egal in welcher Sprache gefragt wurde"
 }}
 
 Verfügbare Tools:
-{tools_block}
+{tools_block}"""
+
+    return f"""Du bist CinAssist, ein KI-Agent für Video-Postproduktion. Du hilfst Profi-Cuttern, Routinearbeiten zu automatisieren (Sichtung/Dérushage, Plansuche, Cleanup, Rohschnitt).
+
+{format_block}
 
 Regeln:
 1. Zerlege komplexe Anfragen in mehrere aufeinanderfolgende Tool-Calls.
@@ -1420,12 +1584,45 @@ Regeln:
 4. Sei prägnant: vermeide redundante Tool-Calls, komm auf den Punkt.
 5. Wenn nichts gefunden wird, sag es ehrlich in final_answer, statt zu erfinden.
 6. IDs vs. Namen: Die meisten Tools akzeptieren jetzt sowohl UUIDs als auch Dateinamen (z. B. "mlk_1min.mp4" oder nur "mlk_1min"). Falls ein Tool mit "invalid UUID" crasht, unterstützt es die Auflösung noch nicht — rufe dann list_clips auf, um die UUID zu erhalten.
-7. Multi-Value-Filter: filter_by_framing akzeptiert mehrere Framings auf einmal als Liste, z. B. framing=["closeup","medium"]. Nicht mehrere separate Calls."""
+7. Multi-Value-Filter: filter_by_framing akzeptiert mehrere Framings auf einmal als Liste, z. B. framing=["closeup","medium"]. Nicht mehrere separate Calls.
+8. ROUTING: Reine Fragen („warum …?“, „welche …?“, „wo sagt sie …?“) beantwortest du über die Wissens-Tools (get_script_overview, get_scene_context, get_take_details, get_plan, search_transcripts) — dabei NIE Editier- oder Generier-Tools aufrufen. Für Fragen nach dem WARUM einer Schnitt-Entscheidung: get_plan liefert grund + beleg jedes Segments — ZITIERE den grund-Text wörtlich („laut Plan: ‚…‘“) statt zu paraphrasieren; erfinde KEINE Gründe (nichts von „Bildqualität“ o. Ä., wenn es nicht dasteht). Rufe dasselbe Tool nicht zweimal mit denselben Argumenten auf.
+9. BEARBEITEN: Änderungen an der Timeline IMMER über edit_timeline / swap_beat_source / regenerate_schnittplan. Sie werden dem Nutzer als Vorschlag mit Geister-Vorschau gezeigt (Accepter/Rejeter) — nichts wird direkt angewandt. Sag das dem Nutzer.
+10. VERIFIKATION: Nach einem Handeln-Tool MUSS final_answer die Zahlen aus der Observation nennen (wie viele Kommandos/Segmente, welche Dauer, welche Warnungen). Erfinde nichts, was nicht in der Observation steht; Warnungen und Fehler IMMER erwähnen.
+11. Referenzen wie „dieser Clip“/„der zweite Clip“ beziehen sich auf den Timeline-Kontext oben (tlId benutzen). Bei Unklarheit, welcher Clip gemeint ist: kurz nachfragen statt raten.
+12. INTERPRETATION VOR AKTION: Redaktionelle Aufträge sind oft implizit — interpretiere sie wie ein Profi-Cutter und NENNE deine Annahmen in final_answer. Standard-Annahmen (gelten IMMER, ohne dass der Nutzer sie sagt): (a) die Klappe/Slate wird NIE mitgeschnitten (Spielfenster benutzen), (b) bei mehreren Takes derselben Szene zählt der BESTE Take (Ranking/Abdeckung), (c) „chronologisch“ heißt Skript-Reihenfolge der Szenen, (d) derselbe Moment wird nie zweimal gezeigt. Beispiel: „Lege die Sequenzen chronologisch nach dem Skript auf die Timeline“ → lege_sequenzen_chronologisch (ein Segment je Szene, bester Take, ohne Klappe) — und final_answer sagt: „Annahmen: Klappen entfernt, bester Take je Szene, Skript-Reihenfolge.“ Ist der Auftrag MEHRDEUTIG mit wesentlich unterschiedlichen Ergebnissen (z. B. „Rohschnitt“ könnte grob-chronologisch ODER der Beat-Feinschnitt sein), stelle EINE kurze Rückfrage mit den Optionen, statt zu raten — ohne Tool-Aufruf.
+
+Beispiele (verkürzt):
+- „Warum wurde für Szene 2 der Take 4 gewählt?“ → get_plan → final_answer zitiert grund/beleg des Segments.
+- „Kürze den ausgewählten Clip um 2 Sekunden am Ende“ → edit_timeline {{commands: [{{"type":"trim","tlId":"<tlId des SELECTED-Clips>","side":"right","delta":-2}}], titel:"Clip kürzen"}} → final_answer: „Vorschlag: 1 Trim (−2 s am Ende von X) — bitte im Editor akzeptieren.“
+- „Zeig Beat 3 aus dem anderen Take“ → get_scene_context (wer belegt B3) → swap_beat_source.{projekt_block}{tl_block}{style_block}"""
 
 
 # ─── Ollama call ─────────────────────────────────────────────
+async def _call_ollama_chat(messages: list[dict], tools: list[dict]) -> tuple[dict, dict]:
+    """Natives Tool-Calling (/api/chat). Liefert (message, meta) — message: {content, tool_calls?}."""
+    t0 = time.time()
+    async with httpx.AsyncClient(timeout=180) as client:
+        r = await client.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json={"model": AGENT_MODEL, "messages": messages, "tools": tools, "stream": False,
+                  "keep_alive": "30m", "options": {"temperature": TEMPERATURE, "num_ctx": 16384},
+                  # qwen3 denkt standardmäßig laut (<think>…) — für den Agenten abschalten: Antworten sind
+                  # kurz und tool-getrieben, das Denken kostet nur Latenz
+                  **({"think": False} if AGENT_MODEL.startswith("qwen3") else {})},
+        )
+        r.raise_for_status()
+        data = r.json()
+    wall = time.time() - t0
+    eval_c = data.get("eval_count", 0)
+    eval_d = data.get("eval_duration", 1) / 1e9
+    meta = {"wall_s": round(wall, 2), "tokens": eval_c,
+            "tokens_per_s": round(eval_c / eval_d, 1) if eval_d > 0 else 0}
+    return data.get("message") or {}, meta
+
+
+
 async def _call_ollama(prompt: str) -> tuple[dict, dict]:
-    """Retourne (parsed_json, meta) où meta contient latence + tokens/s."""
+    """Gibt (parsed_json, meta) zurück; meta enthält Rechenzeit und Token je Sekunde."""
     t0 = time.time()
     async with httpx.AsyncClient(timeout=180) as client:
         r = await client.post(
@@ -1435,9 +1632,10 @@ async def _call_ollama(prompt: str) -> tuple[dict, dict]:
                 "prompt": prompt,
                 "format": "json",
                 "stream": False,
-                # num_ctx élargi : le scratchpad ReAct + la liste d'outils dépassait
-                # le défaut 4096 → troncature → l'agent perdait le fil et rebouclait.
-                "options": {"temperature": TEMPERATURE, "num_ctx": 8192},
+                "keep_alive": "30m",
+                # num_ctx vergrößert: Notizblock und Werkzeugliste überschritten
+                # die Voreinstellung 4096, wurden abgeschnitten, und der Assistent verlor den Faden.
+                "options": {"temperature": TEMPERATURE, "num_ctx": 16384},
             },
         )
         r.raise_for_status()
@@ -1463,12 +1661,99 @@ async def _call_ollama(prompt: str) -> tuple[dict, dict]:
 
 
 # ─── ReAct loop ──────────────────────────────────────────────
-async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | None = None):
-    """Générateur async : yield chaque étape (thought/action/observation/done) au fur et à mesure."""
-    system = _build_system_prompt(timeline_state)
-    trace_lines = [f"UTILISATEUR: {user_prompt}"]
+_ZITAT_RE = re.compile(r"[„\"'«‚]([^“\"'»‘]{3,60})[“\"'»‘]")
+_WARUM_RE = re.compile(r"\b(warum|wieso|weshalb|pourquoi|why)\b", re.IGNORECASE)
+_SZENE_RE = re.compile(r"\b(?:szene|scène|scene)\s*(\d+)", re.IGNORECASE)
+_BEAT_RE = re.compile(r"\bbeat\s*B?(\d+)", re.IGNORECASE)
+_WO_GESAGT_RE = re.compile(r"\b(wo|où|where)\b.{0,40}\b(gesagt|sagt|dit|said|wird)\b|\b(wo wird|où dit|where is)\b", re.IGNORECASE)
+
+
+async def _fast_path(user_prompt: str, db, finalisiere):
+    """Deterministischer Kurzweg für häufige Frage-Muster: Tool direkt aufrufen, Antwort aus den Daten bauen
+    (0 LLM-Calls außer ggf. Übersetzung). Yieldet die üblichen Trace-Events — für UI/Battery formgleich.
+    Greift NICHT (kein done-Event), wenn das Muster nicht passt oder die Daten fehlen — dann übernimmt ReAct."""
+    m_sz, m_beat = _SZENE_RE.search(user_prompt), _BEAT_RE.search(user_prompt)
+    # Muster A: „Warum … Szene N … Beat M?“ → get_plan(szene=N), Grund des Segments mit Beat M zitieren
+    if _WARUM_RE.search(user_prompt) and m_sz and m_beat:
+        szene, beat = m_sz.group(1), int(m_beat.group(1))
+        yield {"type": "thought", "step": 0, "content": f"Muster erkannt: Warum-Frage zu Szene {szene}, Beat {beat} → get_plan (Fast-Path).", "meta": {"wall_s": 0.0, "tokens": 0}}
+        yield {"type": "action", "step": 0, "name": "get_plan", "args": {"szene": szene}}
+        obs = await _kx.tool_get_plan({"szene": szene}, db)
+        yield {"type": "observation", "step": 0, "content": obs}
+        treffer = [e for e in (obs.get("eintraege") or []) if beat in (e.get("beats") or [])]
+        if treffer:
+            teile = []
+            for e in treffer:
+                beleg = " · ".join((e.get("beleg") or [])[:2])
+                teile.append(f"Segment Nr{e['nr']} ({e.get('einstellung')} T{e.get('take')}, {e['in_s']:.0f}–{e['out_s']:.0f}s) — laut Plan: „{e.get('grund')}“" + (f" [{beleg}]" if beleg else ""))
+            final = f"Beat B{beat} der Szene {szene}: " + " | ".join(teile)
+            yield {"type": "done", "step": 0, "content": await finalisiere(final)}
+            return
+        luecke = next((l for l in (obs.get("luecken") or []) if f"B{beat}" in str(l.get("grund") or "")), None)
+        if luecke:
+            yield {"type": "done", "step": 0, "content": await finalisiere(
+                f"Beat B{beat} der Szene {szene} ist NICHT im Schnitt — Grund laut Plan: „{luecke.get('grund')}“")}
+            return
+        return  # Daten unklar → ReAct übernimmt
+    # Muster B: „Wo wird ‚X‘ gesagt?“ → search_transcripts(X)
+    zitat = _ZITAT_RE.search(user_prompt)
+    if zitat and _WO_GESAGT_RE.search(user_prompt):
+        query = zitat.group(1).strip()
+        yield {"type": "thought", "step": 0, "content": f"Muster erkannt: Transkript-Suche nach „{query}“ (Fast-Path).", "meta": {"wall_s": 0.0, "tokens": 0}}
+        yield {"type": "action", "step": 0, "name": "search_transcripts", "args": {"query": query}}
+        obs = await _kx.tool_search_transcripts({"query": query}, db)
+        yield {"type": "observation", "step": 0, "content": obs}
+        treffer = obs.get("treffer") or []
+        if not treffer:
+            yield {"type": "done", "step": 0, "content": await finalisiere(f"„{query}“ wurde in keinem Take-Transkript gefunden.")}
+            return
+        zeilen = [f"- {t['clip']} (Sz{t['szene']} {t.get('einstellung')} T{t.get('take')}) @{t['t']:.0f}s: „{t['text']}“" for t in treffer[:6]]
+        mehr = f" (+{obs['gesamt'] - 6} weitere)" if obs.get("gesamt", 0) > 6 else ""
+        yield {"type": "done", "step": 0, "content": await finalisiere(f"„{query}“ ist {obs.get('gesamt')} × zu hören{mehr}:\n" + "\n".join(zeilen))}
+        return
+    return
+
+
+_FRAGE_RE = re.compile(r"\?|^\s*(warum|wieso|weshalb|welche[rs]?|wer|wo|wann|wie viele?|was|pourquoi|quelle?s?|combien|où|qui|why|which|who|where|how many)\b", re.IGNORECASE)
+_EDIT_RE = re.compile(r"\b(kürz|schneid|lösch|entfern|verschieb|trimm|füge|ersetz|tausch|blende|leg|lege|platzier|erstell|bau|generier|coupe|raccourci|supprime|enlève|déplace|insère|remplace|échange|place|génère|crée|trim|cut|delete|remove|shorten|swap|replace|place|put|create|generate|build|lay)\w*", re.IGNORECASE)
+
+
+async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | None = None,
+                     history: list[dict] | None = None):
+    """Asynchroner Erzeuger: gibt jeden Schritt (thought, action, observation, done) laufend aus."""
+    # Timeline-Snapshot für die Kommando-Validierung der Handeln-Tools verfügbar machen
+    _kx.AKTUELLER_TL_STATE.set(timeline_state)
+    # Projekt-Kontext (Drehbuch/Figuren/Plan) einmal pro Lauf laden — macht den Agenten „projekt-bewusst“
+    projekt = None
+    try:
+        projekt = await _kx.tool_get_script_overview({}, db)
+        if "error" in (projekt or {}):
+            projekt = None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Projekt-Kontext nicht ladbar: %s", e)
+    # Intention (Heuristik) VOR dem Prompt-Bau: reine Frage → nur Wissens-Tools, Editier-Verben → Wissens- + Handeln-Tools
+    ist_frage = bool(_FRAGE_RE.search(user_prompt))
+    ist_edit = bool(_EDIT_RE.search(user_prompt))
+    modus = "edit" if ist_edit else ("frage" if ist_frage else None)
+    system = _build_system_prompt(timeline_state, projekt, modus, nativ=AGENT_NATIVE_TOOLS)
+    # Antwortsprache: die gesamte Agent-Konversation ist DEUTSCH (Nutzer-Vorgabe 20.08.) — egal in welcher
+    # Sprache gefragt wird. Nur eine explizite Stil-Präferenz (language) kann das übersteuern.
+    sp_pref = ((timeline_state or {}).get("style_prefs") or {}).get("language")
+    if ist_edit:
+        system += "\n\n>>> MODUS-HINWEIS: Die Anfrage verlangt eine BEARBEITUNG → am Ende MUSS ein Handeln-Tool (edit_timeline / swap_beat_source / regenerate_schnittplan) stehen, dessen Vorschlag der Nutzer akzeptieren kann."
+    elif ist_frage:
+        system += "\n\n>>> MODUS-HINWEIS: Die Anfrage ist eine FRAGE → beantworte sie über die Wissens-Tools; KEINE Editier-/Generier-Tools."
+    trace_lines = []
+    for h in (history or [])[-8:]:
+        rolle = "NUTZER" if h.get("role") == "user" else "ASSISTENT (frühere Antwort)"
+        inhalt = str(h.get("content") or "").strip()
+        if inhalt:
+            trace_lines.append(f"{rolle}: {inhalt[:500]}")
+    trace_lines.append(f"UTILISATEUR: {user_prompt}")
+
 
     unknown_tool_streak = 0
+    letzte_calls: list[str] = []          # Signaturen (tool+args) der letzten Aufrufe — gegen Wiederhol-Schleifen
 
     def _to_text(x) -> str:
         if isinstance(x, str):
@@ -1478,6 +1763,26 @@ async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | 
         if isinstance(x, (dict, list)):
             return json.dumps(x, ensure_ascii=False)
         return str(x).strip()
+
+    async def _finalisiere(text: str) -> str:
+        """qwen ignoriert die Sprach-Direktive im deutsch-dominierten Prompt oft → finale Antwort bei Bedarf übersetzen.
+        Zitate in ‚…'/„…" bleiben unangetastet (Plan-Gründe sind deutsch und sollen es bleiben)."""
+        if not text or sp_pref not in ("fr", "en"):
+            return text          # Default Deutsch — Übersetzung nur bei expliziter Stil-Präferenz
+        low = f" {text.lower()} "
+        deutsch = sum(1 for w in (" der ", " die ", " das ", " und ", " wurde ", " nicht ", " mit ", " im ", " laut ", " bitte ", " für ") if w in low)
+        ziel_marker = (" le ", " la ", " les ", " été ", " pour ", " selon ") if sp_pref == "fr" else (" the ", " was ", " for ", " according ")
+        if deutsch < 2 or sum(1 for w in ziel_marker if w in low) >= 2:
+            return text
+        ziel = "Französisch" if sp_pref == "fr" else "Englisch"
+        try:
+            parsed, _ = await _call_ollama(
+                f"Übersetze die folgende Antwort eines Schnitt-Assistenten nach {ziel}. Wörtliche Zitate in ‚…' oder \"…\" "
+                f"NICHT übersetzen, Zahlen/Dateinamen/IDs unverändert. Antworte als JSON {{\"final_answer\": \"…\"}}.\n\n{text}")
+            t2 = parsed.get("final_answer")
+            return t2.strip() if isinstance(t2, str) and t2.strip() else text
+        except Exception:  # noqa: BLE001
+            return text
 
     async def _synthesize(reason: str) -> str:
         """Zwingt das LLM, eine finale Antwort basierend auf den Observations zu schreiben."""
@@ -1497,6 +1802,76 @@ async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | 
             logger.warning("synthesis fallback failed: %s", e)
             return ""
 
+
+    # ── Fast-Path: Fragen mit bekanntem Muster deterministisch beantworten (0–1 LLM-Call statt ReAct) ──
+    if ist_frage and not ist_edit:
+        fertig = False
+        async for evt in _fast_path(user_prompt, db, _finalisiere):
+            yield evt
+            if evt.get("type") == "done":
+                fertig = True
+        if fertig:
+            return
+
+    # ── Nativer Tool-Calling-Modus (/api/chat): weniger Format-Fehler, präzisere Argumente ──
+    if AGENT_NATIVE_TOOLS:
+        werkzeuge = [_json_schema_fuer(t) for n, t in TOOLS.items() if n in _aktive_tool_namen(modus)]
+        nachrichten: list[dict] = [{"role": "system", "content": system}]
+        for h in (history or [])[-8:]:
+            inhalt = str(h.get("content") or "").strip()
+            if inhalt:
+                nachrichten.append({"role": "user" if h.get("role") == "user" else "assistant", "content": inhalt[:500]})
+        nachrichten.append({"role": "user", "content": user_prompt})
+        for step in range(MAX_ITERATIONS):
+            try:
+                msg, meta = await _call_ollama_chat(nachrichten, werkzeuge)
+            except Exception as e:  # noqa: BLE001 — z. B. Modell ohne Tool-Support → Legacy-JSON-Schleife
+                logger.warning("Nativer Tool-Modus fehlgeschlagen (%s) — Fallback auf JSON-Schleife.", e)
+                break
+            inhalt = (msg.get("content") or "").strip()
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                final = inhalt or await _synthesize("Chat ohne Antwort")
+                yield {"type": "done", "step": step, "content": await _finalisiere(final or "Fertig."), "meta": meta}
+                return
+            yield {"type": "thought", "step": step, "content": inhalt or f"rufe {calls[0]['function']['name']} auf", "meta": meta}
+            nachrichten.append(msg)
+            for call in calls[:3]:
+                name = (call.get("function") or {}).get("name") or "?"
+                args = (call.get("function") or {}).get("arguments") or {}
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except ValueError:
+                        args = {}
+                yield {"type": "action", "step": step, "name": name, "args": args}
+                signatur = f"{name}:{json.dumps(args, sort_keys=True, ensure_ascii=False)}"
+                if letzte_calls.count(signatur) >= 2:
+                    yield {"type": "observation", "step": step, "content": {"error": "Wiederholter Aufruf — Antwort jetzt formulieren."}}
+                    final = await _synthesize("Wiederhol-Schleife (nativ)") or "Ich konnte keine klare Antwort formulieren."
+                    yield {"type": "done", "step": step, "content": await _finalisiere(final)}
+                    return
+                letzte_calls.append(signatur)
+                tool = TOOLS.get(name)
+                if tool is None:
+                    observation = {"error": f"Unknown tool '{name}'."}
+                else:
+                    try:
+                        observation = await tool.handler(args, db)
+                    except Exception as e:  # noqa: BLE001
+                        logger.exception("Tool %s failed", name)
+                        observation = {"error": f"Tool crashed: {e}"}
+                yield {"type": "observation", "step": step, "content": observation}
+                nachrichten.append({"role": "tool", "tool_name": name,
+                                    "content": json.dumps(_kompakt_obs(observation), ensure_ascii=False)[:4000]})
+                trace_lines.append(f"Assistant: {name}({json.dumps(args, ensure_ascii=False)[:200]})\n"
+                                   f"Observation: {json.dumps(_kompakt_obs(observation), ensure_ascii=False)[:1500]}")
+        else:
+            final = await _synthesize(f"max iter {MAX_ITERATIONS} (nativ)") or f"Maximale Anzahl Iterationen erreicht ({MAX_ITERATIONS})."
+            yield {"type": "done", "step": MAX_ITERATIONS, "content": await _finalisiere(final)}
+            return
+        # (Fallback: bricht hierher → Legacy-JSON-Schleife unten)
+
     for step in range(MAX_ITERATIONS):
         prompt = system + "\n\n" + "\n\n".join(trace_lines) + "\n\nAntworte jetzt im JSON-Format."
         parsed, meta = await _call_ollama(prompt)
@@ -1504,7 +1879,7 @@ async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | 
         action = parsed.get("action", "done")
         args = parsed.get("args", {}) or {}
 
-        # Traite action=null/none/vide comme un signal "je n'ai plus rien à faire"
+        # action=null, none oder leer gilt als Zeichen, dass nichts mehr zu tun ist
         if not action or (isinstance(action, str) and action.strip().lower() in ("none", "null", "n/a", "")):
             action = "done"
 
@@ -1519,7 +1894,7 @@ async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | 
                 obs = {"error": f"Unknown tool '{action}' — forcing synthesis after {unknown_tool_streak} unknown-tool attempts"}
                 yield {"type": "observation", "step": step, "content": obs}
                 final = await _synthesize("Agent-Schleife auf unbekannten Tools") or "Ich konnte keine klare Antwort formulieren."
-                yield {"type": "done", "step": step, "content": final}
+                yield {"type": "done", "step": step, "content": await _finalisiere(final)}
                 return
         else:
             unknown_tool_streak = 0
@@ -1527,13 +1902,24 @@ async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | 
         if action == "done":
             final = _to_text(parsed.get("final_answer")) or _to_text(thought)
             if not final:
-                final = await _synthesize("done sans final_answer")
+                final = await _synthesize("done ohne final_answer")
             if not final:
                 final = "Fertig, aber ich konnte keine klare Antwort formulieren."
-            yield {"type": "done", "step": step, "content": final}
+            yield {"type": "done", "step": step, "content": await _finalisiere(final)}
             return
 
         yield {"type": "action", "step": step, "name": action, "args": args}
+
+        # Wiederhol-Schleife: derselbe Aufruf (Tool + Argumente) zum 3. Mal → Synthese erzwingen,
+        # die Antwort steckt schon in den Observations (oder kommt nie).
+        signatur = f"{action}:{json.dumps(args, sort_keys=True, ensure_ascii=False)}"
+        if letzte_calls.count(signatur) >= 2:
+            obs = {"error": "Dieser Aufruf wurde bereits zweimal gemacht — die Observation oben enthält alles. Formuliere die Antwort."}
+            yield {"type": "observation", "step": step, "content": obs}
+            final = await _synthesize("Wiederhol-Schleife auf identischem Tool-Call") or "Ich konnte keine klare Antwort formulieren."
+            yield {"type": "done", "step": step, "content": await _finalisiere(final)}
+            return
+        letzte_calls.append(signatur)
 
         tool = TOOLS.get(action)
         if tool is None:
@@ -1546,29 +1932,25 @@ async def _run_agent(user_prompt: str, db: AsyncSession, timeline_state: dict | 
                 observation = {"error": f"Tool crashed: {e}"}
 
         yield {"type": "observation", "step": step, "content": observation}
-        # Le frontend reçoit l'observation COMPLÈTE (ci-dessus). Mais on ne réinjecte
-        # PAS les gros champs (segments, decisions…) dans le contexte qwen (4096
-        # tokens) : ça saturait le context → l'agent perdait le fil et rebouclait sur
-        # generate_*. On envoie au LLM un résumé compact.
-        llm_obs = observation
-        if isinstance(observation, dict):
-            _HEAVY = ("segments", "segments_preview", "decisions", "candidates",
-                      "candidates_summary", "plan", "beat_times_s")
-            llm_obs = {k: v for k, v in observation.items() if k not in _HEAVY}
+        # Die Oberfläche erhält die VOLLSTÄNDIGE Beobachtung von oben. In den Kontext von qwen
+        # (4096 Zeichen) wandern die großen Felder (segments, decisions) dagegen NICHT
+        # zurück, denn das füllte den Kontext, der Assistent verlor den Faden und rief immer wieder
+        # generate_* auf. An das Sprachmodell geht daher nur eine Kurzfassung.
+        llm_obs = _kompakt_obs(observation)
         trace_lines.append(
             f"Assistant: {json.dumps(parsed, ensure_ascii=False)}\n"
-            f"Observation: {json.dumps(llm_obs, ensure_ascii=False)[:1200]}"
+            f"Observation: {json.dumps(llm_obs, ensure_ascii=False)[:4000]}"
         )
 
-    # MAX_ITER atteint sans que l'agent ait dit "done" : synthèse forcée
-    # basée sur les observations accumulées (mieux qu'un message d'erreur nu).
+    # MAX_ITER erreicht, ohne dass der Assistent "done" gemeldet hat: erzwungene Zusammenfassung
+    # aus den gesammelten Beobachtungen, besser als eine nackte Fehlermeldung.
     final = await _synthesize(f"max iter {MAX_ITERATIONS} atteint") if len(trace_lines) > 1 else ""
     if not final:
         final = f"Maximale Anzahl Iterationen erreicht ({MAX_ITERATIONS})."
     yield {
         "type": "done",
         "step": MAX_ITERATIONS,
-        "content": final,
+        "content": await _finalisiere(final),
     }
 
 
@@ -1579,16 +1961,17 @@ class AgentRunRequest(BaseModel):
         None,
         description="Snapshot der aktuellen Timeline (clips, videoTrackIndex, start, duration). Vom Frontend geschickt für Kontext.",
     )
+    history: list[dict] | None = Field(None, description="Bisheriger Dialog [{role: user|assistant, content}] — für Folgefragen („ok, mach das“).")
 
 
 @router.post("/run")
 async def run_agent_stream(req: AgentRunRequest, db: AsyncSession = Depends(get_db)):
     """
-    Server-Sent Events stream. Chaque événement = une étape ReAct
+    Datenstrom aus Server-Sent Events. Jedes Ereignis ist ein ReAct-Schritt
     (thought / action / observation / done).
     """
     async def event_gen():
-        async for evt in _run_agent(req.prompt, db, req.timeline_state):
+        async for evt in _run_agent(req.prompt, db, req.timeline_state, req.history):
             yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
@@ -1600,13 +1983,14 @@ class AgentChatRequest(BaseModel):
     ReAct-Stream, damit die UI ohne weitere Änderungen funktioniert."""
     message: str = Field(..., min_length=1)
     timeline_state: dict | None = None
+    history: list[dict] | None = None
 
 
 @router.post("/chat/stream")
 async def chat_stream(req: AgentChatRequest, db: AsyncSession = Depends(get_db)):
     """Alias SSE für den Chat-Panel (Body: {message, timeline_state})."""
     async def event_gen():
-        async for evt in _run_agent(req.message, db, req.timeline_state):
+        async for evt in _run_agent(req.message, db, req.timeline_state, req.history):
             yield f"data: {json.dumps(evt, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
@@ -1614,20 +1998,20 @@ async def chat_stream(req: AgentChatRequest, db: AsyncSession = Depends(get_db))
 
 @router.post("/run_sync")
 async def run_agent_sync(req: AgentRunRequest, db: AsyncSession = Depends(get_db)) -> dict:
-    """Version non-streaming pour tests CLI : renvoie la trace complète en une fois."""
+    """Fassung ohne Datenstrom für Tests auf der Kommandozeile: gibt den ganzen Verlauf auf einmal zurück."""
     trace = []
-    async for evt in _run_agent(req.prompt, db, req.timeline_state):
+    async for evt in _run_agent(req.prompt, db, req.timeline_state, req.history):
         trace.append(evt)
     final = next((e["content"] for e in reversed(trace) if e["type"] == "done"), None)
     return {"final_answer": final, "trace": trace, "step_count": len(trace)}
 
 
-# ─── Compare takes : jugement LLM sur 2-4 scènes ─────────────────────
-# Endpoint dédié qui utilise llama3 (rapide, ~4-8s) plutôt que qwen2.5:14b
-# pour donner un verdict IA sur quel take est le meilleur. Utilisé par la
+# ─── Takes vergleichen: Urteil des Sprachmodells über zwei bis vier Szenen ───
+# Eigener Endpunkt, der llama3 nutzt (schnell, etwa vier bis acht Sekunden) statt qwen2.5:14b,
+# um maschinell zu beurteilen, welcher Take der beste ist. Verwendet von der
 # modale "Comparison Mode" côté frontend.
 
-COMPARE_MODEL = "llama3"  # 4.7 GB, ~10-15 tok/s sur Mac mini → verdict en 5-10s
+COMPARE_MODEL = "llama3"  # 4,7 GB, etwa 10 bis 15 Token je Sekunde auf dem Mac mini, Urteil nach 5 bis 10 s
 
 
 class CompareRequest(BaseModel):
@@ -1640,11 +2024,11 @@ class CompareRequest(BaseModel):
 
 @router.post("/compare")
 async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db)) -> dict:
-    """Charge N scènes, les compare via llama3, retourne un verdict structuré."""
+    """Lädt N Szenen, vergleicht sie über llama3 und gibt ein gegliedertes Urteil zurück."""
     from backend.core.database import Szene, Speaker, SceneSpeaker
     from sqlalchemy import select as _sel
 
-    # Charge les scènes + clip parent + speakers
+    # Szenen, zugehörigen Clip und Sprecher laden
     scenes_rows = (
         await db.execute(
             _sel(Szene)
@@ -1656,7 +2040,7 @@ async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db))
     if len(scenes_rows) < 2:
         raise HTTPException(400, "Mindestens 2 gültige Szenen erforderlich.")
 
-    # Résout les speakers par scène
+    # Sprecher je Szene auflösen
     scene_speakers: dict[str, list[str]] = {}
     for s in scenes_rows:
         ss_rows = (
@@ -1668,7 +2052,7 @@ async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db))
         ).all()
         scene_speakers[str(s.id)] = [row[1] for row in ss_rows] if ss_rows else []
 
-    # Sérialize pour la réponse frontend
+    # Für die Antwort an die Oberfläche aufbereiten
     scenes_out = []
     for s in scenes_rows:
         thumb = s.thumbnail_pfad
@@ -1691,7 +2075,7 @@ async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db))
             "thumbnail_pfad": thumb,
         })
 
-    # Build prompt structuré pour llama3
+    # Gegliederte Eingabe für llama3 zusammenstellen
     criteria_line = req.criteria or "Gesamtqualität für einen Rohschnitt (klares Framing, verständlicher Dialog, Emotion)"
     takes_txt = ""
     for i, sc in enumerate(scenes_out, start=1):
@@ -1721,7 +2105,7 @@ async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db))
         "}\n"
     )
 
-    # Call llama3 (pas qwen — plus rapide)
+    # llama3 aufrufen, nicht qwen, weil schneller
     t0 = time.time()
     async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(
@@ -1738,7 +2122,7 @@ async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db))
     except Exception:
         verdict = {"best_scene_id": scenes_out[0]["scene_id"], "reasoning": f"JSON-Parsing-Fehler; erster Take als Fallback. Raw: {resp_text[:200]}", "per_scene": {}}
 
-    # Assure que best_scene_id existe dans nos scènes
+    # Sicherstellen, dass best_scene_id zu einer unserer Szenen gehört
     valid_ids = {sc["scene_id"] for sc in scenes_out}
     if verdict.get("best_scene_id") not in valid_ids:
         verdict["best_scene_id"] = scenes_out[0]["scene_id"]
@@ -1754,28 +2138,28 @@ async def compare_takes(req: CompareRequest, db: AsyncSession = Depends(get_db))
     }
 
 
-# ─── Agent proactif : suggestions après ingest ────────────────────────
-# À la fin de l'ingest d'un clip (status → "analysiert"), le frontend appelle
-# cet endpoint pour recevoir 2-4 suggestions concrètes basées sur ce qu'on a
-# détecté (speakers, framings, transkriptions). Chaque suggestion contient un
+# ─── Vorausschauender Assistent: Vorschläge nach der Aufnahme ──────────
+# Am Ende der Aufnahme eines Clips (Status "analysiert") ruft die Oberfläche
+# diesen Endpunkt auf und erhält zwei bis vier greifbare Vorschläge, gestützt auf das,
+# was erkannt wurde (Sprecher, Einstellungsgrößen, Transkriptionen). Jeder Vorschlag enthält einen
 # `prompt` prêt-à-envoyer à l'agent ReAct normal.
 #
-# Règles déterministes (pas de LLM) : rapide, prédictible, tune-able.
+# Feste Regeln, kein Sprachmodell: schnell, vorhersagbar und nachjustierbar.
 
 _HESITATION_PATTERN = re.compile(r"\b(äh+m?|ähm|hmm+|euh+|uhh+|umm+|erm|eh)\b", re.IGNORECASE)
 
 
 @router.post("/proactive/{clip_id}")
 async def proactive_suggestions(clip_id: str, db: AsyncSession = Depends(get_db)) -> dict:
-    """Analyse les données d'ingest d'un clip et propose 2-4 actions concrètes.
+    """Wertet die Aufnahmedaten eines Clips aus und schlägt zwei bis vier konkrete Schritte vor.
 
-    Retourne toujours un objet stable même si le clip n'a pas assez de data
-    (ex: pas de scènes) — le frontend affichera juste "keine Vorschläge".
+    Gibt immer ein gleichbleibend aufgebautes Objekt zurück, auch wenn der Clip zu wenig Daten hat
+    (etwa keine Szenen); die Oberfläche zeigt dann schlicht "keine Vorschläge".
     """
     from backend.core.database import Clip, Szene, Speaker
     from sqlalchemy import select, func
 
-    # Charge clip + scènes en une seule requête
+    # Clip und Szenen in einer einzigen Abfrage laden
     clip_row = (
         await db.execute(select(Clip).where(Clip.id == clip_id))
     ).scalar_one_or_none()
@@ -1803,7 +2187,7 @@ async def proactive_suggestions(clip_id: str, db: AsyncSession = Depends(get_db)
     n_wide = sum(1 for s in scenes if s.framing in ("wide_with_person", "wide_no_person"))
     n_medium = sum(1 for s in scenes if s.framing == "medium")
 
-    # Compte les hésitations dans toutes les transkriptions
+    # Zählt die Versprecher in allen Transkriptionen
     n_hesitations = 0
     for s in scenes:
         if s.transkription:
@@ -1834,7 +2218,7 @@ async def proactive_suggestions(clip_id: str, db: AsyncSession = Depends(get_db)
             "icon": "scissors",
         })
 
-    # Règle #3 : scènes muettes = probable stille → cleanup
+    # Regel 3: stumme Szenen deuten auf Stille hin, also cleanup
     if n_mute >= 2 and n_dialog >= 1:
         suggestions.append({
             "title": "Stille entfernen",
@@ -1864,7 +2248,7 @@ async def proactive_suggestions(clip_id: str, db: AsyncSession = Depends(get_db)
             "icon": "star",
         })
 
-    # Règle #6 (fallback) : au moins proposer un splitten sur les scènes
+    # Regel 6 als Rückfall: zumindest ein Aufteilen der Szenen vorschlagen
     if not suggestions and n_scenes >= 3:
         suggestions.append({
             "title": "Szenen splitten",
@@ -1890,13 +2274,13 @@ async def proactive_suggestions(clip_id: str, db: AsyncSession = Depends(get_db)
             "n_hesitations": n_hesitations,
             "total_dauer": round(total_dauer, 1),
         },
-        "suggestions": suggestions[:4],  # max 4 pour ne pas noyer l'UI
+        "suggestions": suggestions[:4],  # höchstens vier, um die Oberfläche nicht zu überladen
     }
 
 
 @router.get("/tools")
 async def list_tools() -> dict:
-    """Liste des tools disponibles à l'agent (pour debug / doc)."""
+    """Liste der Werkzeuge, die dem Assistenten zur Verfügung stehen, für Fehlersuche und Doku."""
     return {
         "model": AGENT_MODEL,
         "max_iterations": MAX_ITERATIONS,

@@ -1,12 +1,12 @@
-"""Runner de benchmark quantitatif pour le générateur timeline-from-prompt.
+"""Ausführung des quantitativen Vergleichslaufs für die Timeline-Erzeugung.
 
-Itère sur un set de prompts, exécute Plan → Retrieve → Assemble, calcule
-toutes les métriques (backend/evaluation/metrics.py) et écrit un rapport dans
+Geht eine Reihe von Eingaben durch, führt Zerlegung, Abruf und Zusammenstellung aus, berechnet
+alle Maße (backend/evaluation/metrics.py) und schreibt einen Bericht nach
 `backend/evaluation/reports/{run_ts}/` :
 
-- `results.json` — dict complet par prompt (input pour re-analyse)
-- `results.csv` — 1 ligne / prompt, colonnes = métriques flat
-- `summary.md` — tableau global + par-profil, lisible humain
+- `results.json`, das vollständige Wörterbuch je Eingabe, Grundlage für eine erneute Auswertung
+- `results.csv`, eine Zeile je Eingabe, die Spalten sind die einzelnen Maße
+- `summary.md`, eine Gesamttabelle und eine je Profil, für Menschen lesbar
 
 Usage :
     python -m backend.evaluation.run_benchmark
@@ -60,8 +60,8 @@ async def _get_analyzed_clip_ids(db) -> list[str]:
 
 
 async def _load_speaker_map(db, clip_ids: list[str]) -> dict[str, float]:
-    """Retourne {scene_id: max speaking_time} pour toutes les scènes du pool.
-    Utilisé par constraint_precision.speaker_precision."""
+    """Gibt {scene_id: längste Sprechzeit} für alle Szenen des Bestands zurück.
+    Wird von constraint_precision.speaker_precision verwendet."""
     if not clip_ids:
         return {}
     from backend.core.database import Szene
@@ -81,18 +81,18 @@ async def _load_speaker_map(db, clip_ids: list[str]) -> dict[str, float]:
 
 
 def _embed_fn():
-    """Retourne une fonction embed_text (CLIP text encoder singleton)."""
+    """Gibt eine Funktion embed_text zurück, gestützt auf die Einzelinstanz des CLIP-Textkodierers."""
     from backend.core.timeline_generator import _embed_text_lazy
     return _embed_text_lazy
 
 
-# ─── Exécution d'un prompt ───────────────────────────────────────────────────
+# ─── Durchlauf einer einzelnen Eingabe ──────────────────────────────────────
 
 async def run_one(bp: BenchmarkPrompt, clip_ids: list[str],
                   assemble_mode: str, top_k: int,
                   speaker_map: dict[str, float],
                   use_query_rewrite: bool = False) -> dict:
-    """Exécute les 3 phases (ou une baseline) + calcule les métriques pour UN prompt."""
+    """Führt die drei Phasen oder ein Vergleichsverfahren aus und berechnet die Maße für EINE Anfrage."""
     t_start = time.time()
 
     if assemble_mode in BASELINE_MODES:
@@ -155,7 +155,7 @@ async def run_one(bp: BenchmarkPrompt, clip_ids: list[str],
     }
 
 
-# ─── Génération rapport ──────────────────────────────────────────────────────
+# ─── Berichtserzeugung ───────────────────────────────────────────────────────
 
 def _md_row(cells: list[str]) -> str:
     return "| " + " | ".join(cells) + " |"
@@ -181,7 +181,7 @@ def build_summary_md(all_results: list[dict], run_ts: str, tag: str) -> str:
         lines.append(f"**Modes assembler** : {', '.join(modes)}")
     lines.append("")
 
-    # ── Statistiques globales par mode ──
+    # ── Gesamtkennzahlen je Modus ──
     lines.append("## Statistiques globales")
     lines.append("")
     keys = [
@@ -205,8 +205,8 @@ def build_summary_md(all_results: list[dict], run_ts: str, tag: str) -> str:
         lines.append(_md_row(vals))
     lines.append("")
 
-    # ── Par profil ──
-    lines.append("## Moyennes par profil (mode heuristic uniquement si présent, sinon 1er mode)")
+    # ── Je Profil ──
+    lines.append("## Mittelwerte je Profil (Modus heuristic, sofern vorhanden, sonst der erste Modus)")
     lines.append("")
     lines.append(_md_row(["profile", "n"] + keys))
     lines.append(_md_row(["---"] * (len(keys) + 2)))
@@ -224,8 +224,8 @@ def build_summary_md(all_results: list[dict], run_ts: str, tag: str) -> str:
         lines.append(_md_row(vals))
     lines.append("")
 
-    # ── Détail par prompt ──
-    lines.append("## Résultats par prompt")
+    # ── Einzelheiten je Eingabe ──
+    lines.append("## Ergebnisse je Eingabe")
     lines.append("")
     detail_keys = ["coverage_mean", "framing_precision", "speaker_precision",
                    "dialogue_precision", "duration_deviation_pct",
@@ -248,7 +248,7 @@ def write_csv(all_results: list[dict], path: Path) -> None:
     if not all_results:
         return
     flat_rows = [M.flatten_for_csv(r["metrics"]) for r in all_results]
-    # Union des clés (les rows peuvent avoir des champs différents)
+    # Vereinigung der Schlüssel, da die Zeilen unterschiedliche Felder tragen können
     all_keys: list[str] = []
     for row in flat_rows:
         for k in row:
@@ -267,7 +267,7 @@ async def main_async(args) -> int:
     async with AsyncSessionLocal() as db:
         clip_ids = await _get_analyzed_clip_ids(db)
         if not clip_ids:
-            print("ERROR: aucun clip analysé dans la DB", file=sys.stderr)
+            print("FEHLER: kein ausgewerteter Clip in der Datenbank", file=sys.stderr)
             return 2
         speaker_map = await _load_speaker_map(db, clip_ids)
 
@@ -283,7 +283,7 @@ async def main_async(args) -> int:
         prompts = prompts[:args.limit]
 
     if not prompts:
-        print("ERROR: aucun prompt à exécuter", file=sys.stderr)
+        print("FEHLER: keine Eingabe zum Ausführen", file=sys.stderr)
         return 2
 
     modes = [m.strip() for m in args.assemble_modes.split(",") if m.strip()]
@@ -348,9 +348,9 @@ def main() -> int:
     ap.add_argument("--prompt-ids", type=str, default=None,
                     help="IDs de prompts (comma-separated), ignore --profile")
     ap.add_argument("--limit", type=int, default=None,
-                    help="Limiter à N prompts (utile pour smoke-test)")
+                    help="Auf N Eingaben begrenzen, nützlich für einen kurzen Probelauf")
     ap.add_argument("--assemble-modes", type=str, default="heuristic",
-                    help=("Modes à comparer, séparés par virgule. Pipeline: "
+                    help=("Zu vergleichende Modi, durch Komma getrennt. Hauptstrecke: "
                           "'heuristic', 'llm'. Baselines: 'baseline_random', "
                           "'baseline_no_filter', 'baseline_single_shot'. "
                           "Ex: 'heuristic,baseline_random,baseline_single_shot'"))
@@ -358,7 +358,7 @@ def main() -> int:
     ap.add_argument("--query-rewrite", action="store_true",
                     help="Aktiviert llama3 Query-Rewriting vor CLIP-Embedding (Ablation).")
     ap.add_argument("--tag", type=str, default="",
-                    help="Suffixe optionnel du dossier rapport (ex: 'improvements_v2')")
+                    help="Freigestellter Namenszusatz des Berichtsordners, etwa 'improvements_v2'")
     args = ap.parse_args()
 
     return asyncio.run(main_async(args))

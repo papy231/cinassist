@@ -212,10 +212,34 @@ function StreamingSteps({ steps, collapsed }: { steps: ChatStep[]; collapsed: bo
             // Flèche retour / résultat
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
           );
+        // Live-Anzeige menschlich statt roh: Tool-Namen als deutsche Labels, Observations als 1-Zeilen-Zusammenfassung.
+        // Rohdaten (Args/JSON) sieht man weiter nach Klick auf „Schritte anzeigen" nach Abschluss — hier nur der Fortschritt.
+        const TOOL_LABELS: Record<string, string> = {
+          get_script_overview: "Drehbuch-Überblick lesen", get_scene_context: "Szenen-Kontext lesen",
+          get_take_details: "Take-Details lesen", get_plan: "Schnittplan lesen", search_transcripts: "Transkripte durchsuchen",
+          edit_timeline: "Timeline-Vorschlag bauen", regenerate_schnittplan: "Beat-Planer läuft (30–90 s)",
+          swap_beat_source: "Beat-Quelle tauschen", lege_sequenzen_chronologisch: "Chronologische Fassung bauen",
+          lege_alternativen: "Alternativen auf V2/V3 stapeln",
+          remove_silences: "Stille suchen", find_hesitations: "Zögerungen suchen", list_clips: "Clips auflisten",
+        };
+        const obsSummary = (c: unknown): string => {
+          if (c == null || typeof c !== "object") return short(c, 120);
+          const o = c as Record<string, unknown>;
+          if (typeof o.error === "string") return `Fehler: ${short(o.error, 110)}`;
+          const teile: string[] = [];
+          if (Array.isArray(o.segments)) teile.push(`${o.segments.length} Segmente`);
+          if (Array.isArray(o.commands)) teile.push(`${o.commands.length} Kommando(s)`);
+          if (Array.isArray(o.eintraege)) teile.push(`${o.eintraege.length} Plan-Einträge`);
+          if (Array.isArray(o.treffer)) teile.push(`${o.treffer.length} Treffer`);
+          if (Array.isArray(o.szenen)) teile.push(`${o.szenen.length} Szenen`);
+          if (typeof o.dauer_s === "number") teile.push(`${(o.dauer_s as number).toFixed(0)} s`);
+          if (Array.isArray(o.warnungen) && o.warnungen.length) teile.push(`${o.warnungen.length} Warnung(en)`);
+          return teile.length ? `Ergebnis: ${teile.join(" · ")}` : short(c, 120);
+        };
         let body: string;
         if (s.type === "thought") body = short(s.content, 200);
-        else if (s.type === "action") body = `${s.name ?? "?"}(${short(s.args, 90)})`;
-        else body = short(s.content, 160);
+        else if (s.type === "action") body = `${TOOL_LABELS[s.name ?? ""] ?? s.name ?? "?"}…`;
+        else body = obsSummary(s.content);
         return (
           <div key={i} style={{ color, display: "flex", gap: 6, alignItems: "flex-start" }}>
             <span style={{ flex: "none", opacity: 0.75, marginTop: 2 }}>{iconSvg}</span>
@@ -239,6 +263,7 @@ function ProposalActions({ proposalId }: { proposalId: string }) {
   const proposal = useProposalStore((s) => s.proposals.find((p) => p.id === proposalId));
   const acceptProposal = useProposalStore((s) => s.acceptProposal);
   const rejectProposal = useProposalStore((s) => s.rejectProposal);
+  const previewProposal = useProposalStore((s) => s.previewProposal);
   if (!proposal) return null;
 
   const nEdits = proposal.edits.length;
@@ -260,6 +285,31 @@ function ProposalActions({ proposalId }: { proposalId: string }) {
       </div>
     );
   }
+  if (proposal.status === "previewing") {
+    // Vorschau läuft: Timeline zeigt die Proposal, NICHTS ist festgeschrieben. Annehmen behält, Verwerfen stellt zurück.
+    return (
+      <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ fontSize: 11, color: "#e5c100", display: "flex", alignItems: "center", gap: 6 }}>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#e5c100" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" /><circle cx="12" cy="12" r="3" /></svg>
+          Vorschau aktiv — die Timeline zeigt den Vorschlag, noch nichts übernommen.
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button
+            onClick={() => acceptProposal(proposalId)}
+            style={{ flex: 1, background: ACCENT, color: "#000", border: "none", borderRadius: 6, padding: "6px 10px", fontWeight: 600, fontSize: 12, cursor: "pointer" }}
+          >
+            Annehmen
+          </button>
+          <button
+            onClick={() => rejectProposal(proposalId)}
+            style={{ flex: 1, background: "transparent", color: "#c9c9c9", border: "1px solid rgba(255,255,255,0.18)", borderRadius: 6, padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
+          >
+            Verwerfen
+          </button>
+        </div>
+      </div>
+    );
+  }
   // pending or partial
   return (
     <div style={{ marginTop: 10, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
@@ -267,6 +317,13 @@ function ProposalActions({ proposalId }: { proposalId: string }) {
         <div style={{ fontSize: 11, color: "#a0a0a0", fontStyle: "italic" }}>{proposal.summary}</div>
       )}
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <button
+          onClick={() => previewProposal(proposalId)}
+          title="Probeweise auf die Timeline legen — nichts wird übernommen, bis du „Annehmen“ klickst"
+          style={{ flex: 1, background: "transparent", color: ACCENT, border: `1px solid ${ACCENT}`, borderRadius: 6, padding: "6px 10px", fontWeight: 600, fontSize: 12, cursor: "pointer" }}
+        >
+          Vorschau
+        </button>
         <button
           onClick={() => acceptProposal(proposalId)}
           style={{ flex: 1, background: ACCENT, color: "#000", border: "none", borderRadius: 6, padding: "6px 10px", fontWeight: 600, fontSize: 12, cursor: "pointer" }}
@@ -322,6 +379,13 @@ export default function ChatPanel() {
     // `timeline_state.style_prefs` et étend son system prompt en conséquence.
     const stylePrefs = useStylePrefsStore.getState().prefs;
     const timeline_state = rawSnapshot ? { ...rawSnapshot, style_prefs: stylePrefs } : { style_prefs: stylePrefs };
+    // Historique de conversation (8 derniers tours user/assistant) — permet les suites
+    // « ok fais-le », « plutôt 3 secondes » : le backend l'injecte dans le contexte ReAct.
+    const history = useChatStore
+      .getState()
+      .messages.filter((m) => (m.role === "user" || m.role === "assistant") && m.content && !m.isStreaming)
+      .slice(-8)
+      .map((m) => ({ role: m.role, content: m.content.slice(0, 500) }));
     const accumulatedSteps: BackendTraceEvent[] = [];
     let finalAnswer = "";
     let streamErrored = false;
@@ -330,7 +394,7 @@ export default function ChatPanel() {
       const res = await fetch("/api/agent/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ message: msg, timeline_state }),
+        body: JSON.stringify({ message: msg, timeline_state, history }),
       });
       if (!res.ok || !res.body) {
         const errText = await res.text().catch(() => "");

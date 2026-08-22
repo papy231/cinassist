@@ -1,10 +1,10 @@
-"""Prototype standalone du Planner LLM (Phase 1 du générateur timeline-from-prompt).
+"""Eigenständiger Prototyp der Anfrage-Zerlegung (Phase 1 der Timeline-Erzeugung).
 
-Prend un prompt utilisateur + durée cible → produit un plan structuré JSON :
-une liste ordonnée de slots (intent + durée + contraintes framing/speaker/dialogue).
+Nimmt eine Nutzereingabe und eine Zieldauer und erzeugt daraus eine gegliederte JSON-Zerlegung:
+eine geordnete Liste von Slots mit Absicht, Dauer und Bedingungen zu Einstellungsgröße, Sprecher und Dialog.
 
-Objectif : valider que qwen2.5:14b sort du JSON stable et exploitable AVANT de
-wire dans l'agent. Aucune dépendance à la DB ou au reste du backend.
+Zweck: prüfen, ob qwen2.5:14b verlässliches und verwertbares JSON liefert, BEVOR es
+in den Assistenten eingebunden wird. Ohne Bindung an die Datenbank oder den übrigen Dienst.
 
 Usage :
     python -m backend.tools.prototype_timeline_planner \\
@@ -115,7 +115,7 @@ def call_ollama(full_prompt: str, temperature: float = 0.3, timeout_s: int = 600
 
 
 def validate_plan(plan: dict, target_duration: float) -> list[str]:
-    """Retourne une liste d'erreurs/warnings vides si le plan est OK."""
+    """Gibt eine Liste von Fehlern und Hinweisen zurück, leer, wenn die Zerlegung stimmt."""
     errors: list[str] = []
     if not isinstance(plan, dict):
         return ["Plan ist kein dict"]
