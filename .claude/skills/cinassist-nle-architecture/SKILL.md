@@ -1,119 +1,120 @@
 ---
 name: cinassist-nle-architecture
 description: >-
-  Architecture de référence pour CinAssist — le montage vidéo non-linéaire (NLE)
-  de type Final Cut / DaVinci que construit Pascal en Next.js avec la balise
-  video HTML5.
-  UTILISER DÈS QU'il est question de l'éditeur vidéo, du Schnittassistenzsystem,
-  de la timeline, du playhead, de la synchro player/timeline, de clips, de scrub,
-  de lecture (playback), de trous noirs, de saccades, ou d'ajouter/corriger une
-  fonctionnalité de montage (split, trim, ripple, roll, slip, slide, transitions).
-  Utiliser aussi quand les mots-clés apparaissent en allemand (Schnitt, Timeline,
-  Wiedergabe, Abspielkopf) ou en anglais (NLE, timeline, playhead, playback engine,
-  compositor, non-linear editor). Toujours consulter ce skill AVANT d'écrire du
-  code lié à la lecture ou à la timeline, même si la demande semble simple : la
-  plupart des bugs de CinAssist viennent d'un mauvais modèle mental corrigé ici.
+  Referenzarchitektur für CinAssist, den nichtlinearen Videoschnitt (NLE) nach Art
+  von Final Cut oder DaVinci, den Pascal in Next.js mit dem HTML5-video-Element baut.
+  ZU VERWENDEN, SOBALD es um den Videoeditor, das Schnittassistenzsystem, die
+  Timeline, den Abspielkopf, die Synchronität von Abspieler und Timeline, um Clips,
+  Scrub, Wiedergabe, schwarze Bilder, Ruckeln oder um das Ergänzen oder Beheben
+  einer Schnittfunktion geht (Trennen, Trimmen, Ripple, Roll, Slip, Slide,
+  Übergänge). Auch dann verwenden, wenn die Stichwörter auf Französisch
+  (montage, timeline, lecture) oder auf Englisch auftauchen (NLE, timeline,
+  playhead, playback engine, compositor, non-linear editor). Dieses Skill immer
+  heranziehen, BEVOR Code zur Wiedergabe oder zur Timeline geschrieben wird, auch
+  wenn die Anfrage einfach wirkt: Die meisten Fehler in CinAssist stammen aus einem
+  falschen Denkmodell, das hier richtiggestellt wird.
 ---
 
-# CinAssist — Architecture NLE
+# CinAssist — NLE-Architektur
 
-CinAssist est un système d'assistance au montage vidéo (Schnittassistenzsystem)
-construit en **Next.js + `<video>` HTML5** dans le navigateur. Ce skill encode le
-modèle mental correct d'un montage non-linéaire, pour que chaque intervention sur
-l'éditeur reste cohérente et n'introduise pas les bugs classiques (playhead
-saccadé, timeline désynchronisée, trous noirs aux frontières de clips).
+CinAssist ist ein Schnittassistenzsystem, gebaut in **Next.js mit dem HTML5-Element
+`<video>`** im Browser. Dieses Skill hält das richtige Denkmodell eines nichtlinearen
+Schnitts fest, damit jeder Eingriff in den Editor stimmig bleibt und die bekannten Fehler
+nicht neu entstehen: ruckelnder Abspielkopf, auseinanderlaufende Timeline, schwarze Bilder
+an den Clipgrenzen.
 
-## La règle d'or (à ne jamais violer)
+## Die Grundregel (niemals verletzen)
 
-**La timeline est la SEULE source de vérité. Une seule horloge produit le temps
-`t`. Tout le reste suit `t` — jamais l'inverse.**
+**Die Timeline ist die EINZIGE Wahrheitsquelle. Eine einzige Uhr erzeugt die Zeit `t`.
+Alles andere folgt `t`, niemals umgekehrt.**
 
-Le lecteur ne « joue » pas une vidéo. Il affiche *la frame calculée pour `t`*.
-L'élément `<video>` n'est qu'une sortie parmi d'autres (playhead, waveforms,
-audio) qui rattrape `t`. Dès qu'on inverse ce rapport — c'est-à-dire dès qu'on
-pilote la timeline à partir du temps de la `<video>` — on obtient de la
-désynchronisation et des saccades. C'est l'erreur d'architecture n°1.
+Der Abspieler „spielt" kein Video. Er zeigt *das für `t` berechnete Bild*. Das Element
+`<video>` ist nur eine Ausgabe unter mehreren — neben Abspielkopf, Wellenform und Ton —,
+die `t` nachlaufen. Sobald dieses Verhältnis umgekehrt wird, sobald also die Timeline aus
+der Zeit der `<video>` gesteuert wird, entstehen Versatz und Ruckeln. Das ist der
+Architekturfehler Nummer eins.
 
-## Le modèle en trois couches
+## Das Modell in drei Schichten
 
-Toute fonctionnalité de CinAssist appartient à **exactement une** de ces couches.
-Avant d'écrire du code, identifier la couche : ça évite 90 % des régressions.
+Jede Funktion in CinAssist gehört zu **genau einer** dieser Schichten. Vor dem Schreiben
+von Code die Schicht bestimmen, das verhindert 90 Prozent der Rückschritte.
 
-1. **Modèle (source de vérité)** — la structure de données de la séquence :
-   pistes, clips, chaque clip = `{ src, sourceIn, timelineStart, duration }`.
-   Le temps y est en **frames entières**, jamais en secondes flottantes.
-   → Les opérations d'édition (split, trim, ripple…) sont de **pures
-   transformations de ce modèle**. Elles ne touchent JAMAIS à la `<video>`.
+1. **Modell (Wahrheitsquelle)** — die Datenstruktur der Sequenz: Spuren, Clips, jeder Clip
+   als `{ src, sourceIn, timelineStart, duration }`. Die Zeit steht darin in **ganzen
+   Einzelbildern**, nie in Gleitkommasekunden.
+   → Die Schnittoperationen (Trennen, Trimmen, Ripple und weitere) sind **reine Umformungen
+   dieses Modells**. Sie fassen die `<video>` NIEMALS an.
 
-2. **Horloge (le temps `t`)** — une `MasterClock` unique, pilotée par
-   `requestAnimationFrame` (60 fps). C'est elle qui fait avancer `t` pendant la
-   lecture et qui saute lors d'un scrub/seek.
-   → Le playhead lit `t` ici. Il ne lit JAMAIS `video.currentTime`.
+2. **Uhr (die Zeit `t`)** — eine einzige `MasterClock`, geführt von
+   `requestAnimationFrame` (60 fps). Sie lässt `t` während der Wiedergabe fortschreiten und
+   springt bei Scrub oder Sprung.
+   → Der Abspielkopf liest `t` hier. Er liest NIEMALS `video.currentTime`.
 
-3. **Compositeur (le rendu)** — à chaque frame, pour le `t` courant : résoudre
-   quel(s) clip(s) sont actifs, calculer le temps source voulu, positionner la
-   bonne `<video>`, compositer, afficher.
-   → C'est ici que vivent le pool de `<video>`, le préchargement, la correction
-   de drift, et plus tard les effets/transitions.
+3. **Compositor (die Ausgabe)** — in jedem Bild und für das laufende `t`: auflösen, welche
+   Clips aktiv sind, die gewünschte Quellzeit berechnen, die richtige `<video>`
+   positionieren, überlagern, anzeigen.
+   → Hier leben der Vorrat an `<video>`, das Vorladen, die Nachführung bei Abweichung und
+   später die Effekte und Übergänge.
 
 ```
-   Modèle  ──lu par──►  Compositeur  ──produit──►  frame affichée
-      ▲                      ▲
-      │                      │ lit t
-   édité par           Horloge (t) ──lu par──► Playhead UI
-   les outils
+   Modell  ──gelesen von──►  Compositor  ──erzeugt──►  angezeigtes Bild
+      ▲                          ▲
+      │                          │ liest t
+   bearbeitet von           Uhr (t) ──gelesen von──► Abspielkopf der Oberfläche
+   den Werkzeugen
 ```
 
-## Le mapping fondamental (toute la synchro tient là-dessus)
+## Die grundlegende Abbildung (darauf beruht die ganze Synchronität)
 
-Pour un clip actif au temps timeline `t` :
+Für einen bei der Timeline-Zeit `t` aktiven Clip gilt:
 
 ```
 sourceFrame = clip.sourceIn + (t − clip.timelineStart)
 ```
 
-`sourceIn` = point d'entrée dans le fichier source. `timelineStart` = position du
-clip sur la timeline. Ce sont deux temps distincts ; les confondre casse tout.
+`sourceIn` ist der Einstiegspunkt in der Quelldatei, `timelineStart` die Position des Clips
+auf der Timeline. Das sind zwei verschiedene Zeiten. Sie zu verwechseln bricht alles.
 
-## Workflow quand on te demande de corriger ou d'ajouter quelque chose
+## Vorgehen bei einer Korrektur oder Ergänzung
 
-1. **Identifier la couche** (modèle / horloge / compositeur). Si la demande
-   mélange plusieurs couches, la découper.
-2. **Vérifier la règle d'or** : est-ce que la solution envisagée fait piloter la
-   timeline par la `<video>` ? Si oui, c'est faux — repartir de l'horloge.
-3. **Rester en frames entières** dans toute la logique ; convertir en secondes
-   seulement au contact de la `<video>` (`video.currentTime`) et de l'affichage.
-4. **Pour un bug de lecture/synchro**, consulter d'abord
-   `references/common-bugs.md` : le catalogue relie chaque symptôme à sa cause
-   racine et à sa correction. Ne pas rustiner le symptôme.
-5. **Pour une opération d'édition** (split, trim, ripple, roll, slip, slide),
-   consulter `references/timeline-model.md` : chacune y est décrite comme une
-   transformation pure du modèle.
-6. **Pour le moteur de lecture** (horloge, résolveur, pool `<video>`, drift,
-   préchargement), consulter `references/playback-engine.md`. Une implémentation
-   TypeScript prête à adapter est fournie dans `assets/playback-engine.ts`.
+1. **Die Schicht bestimmen** (Modell, Uhr oder Compositor). Betrifft die Anfrage mehrere
+   Schichten, wird sie zerlegt.
+2. **Die Grundregel prüfen**: Führt der geplante Weg dazu, dass die `<video>` die Timeline
+   steuert? Dann ist er falsch, und es ist von der Uhr aus neu zu denken.
+3. **In ganzen Einzelbildern bleiben** in der gesamten Logik. Erst im Kontakt mit der
+   `<video>` (`video.currentTime`) und mit der Anzeige wird in Sekunden umgerechnet.
+4. **Bei einem Fehler in Wiedergabe oder Synchronität** zuerst
+   `references/common-bugs.md` heranziehen. Der Katalog verbindet jedes Symptom mit seiner
+   Ursache und ihrer Behebung. Nicht das Symptom flicken.
+5. **Für eine Schnittoperation** (Trennen, Trimmen, Ripple, Roll, Slip, Slide)
+   `references/timeline-model.md` heranziehen. Jede ist dort als reine Umformung des
+   Modells beschrieben.
+6. **Für die Wiedergabe** (Uhr, Auflöser, Vorrat an `<video>`, Abweichung, Vorladen)
+   `references/playback-engine.md` heranziehen. Eine anpassbare Umsetzung in TypeScript
+   liegt in `assets/playback-engine.ts`.
 
-## Pièges spécifiques au web (`<video>` HTML5)
+## Fallstricke des Web-Elements `<video>`
 
-- **Ne jamais** piloter le playhead depuis l'événement `timeupdate` : il ne tire
-  que ~4 fois/seconde → saccade. Piloter depuis `requestAnimationFrame`.
-- **Ne jamais** faire `video.currentTime = …` à chaque frame en lecture : chaque
-  écriture provoque un re-seek qui hache la lecture. En lecture, laisser la
-  `<video>` jouer seule et ne corriger que si le drift dépasse un seuil (~0.15 s).
-- **Un seul `<video>` = trous noirs** aux changements de clip (chargement + seek
-  asynchrones). Utiliser un **pool** de 2 `<video>` et **précharger** le clip
-  suivant à l'avance. Un trou noir sur un *vrai* trou de timeline est correct.
-- **Drift des float** : le temps en secondes flottantes dérive. Stocker le temps
-  en frames entières et ne convertir qu'au dernier moment.
+- Den Abspielkopf **niemals** aus dem Ereignis `timeupdate` führen. Es feuert nur etwa vier
+  Mal je Sekunde und lässt die Bewegung ruckeln. Stattdessen aus `requestAnimationFrame`.
+- Während der Wiedergabe **niemals** in jedem Bild `video.currentTime = …` setzen. Jedes
+  Schreiben löst einen erneuten Sprung aus und zerhackt die Wiedergabe. Die `<video>` allein
+  laufen lassen und nur nachführen, wenn die Abweichung einen Schwellwert von etwa 0,15 s
+  überschreitet.
+- **Eine einzige `<video>` erzeugt schwarze Bilder** beim Clipwechsel, weil Laden und
+  Springen asynchron sind. Einen **Vorrat** aus zwei `<video>` nutzen und den nächsten Clip
+  im Voraus laden. Ein schwarzes Bild über einer *echten* Lücke der Timeline ist dagegen
+  richtig.
+- **Abweichung der Gleitkommazahlen**: Zeit in Gleitkommasekunden driftet. Die Zeit in
+  ganzen Einzelbildern halten und erst im letzten Moment umrechnen.
 
-## Fichiers de référence
+## Referenzdateien
 
-- `references/playback-engine.md` — horloge maîtresse, résolveur, pool `<video>`,
-  correction de drift, préchargement. Lire pour tout travail sur la lecture.
-- `references/timeline-model.md` — modèle de données, temps en frames, et les
-  opérations d'édition (split, trim, ripple, roll, slip, slide) comme
-  transformations pures. Lire pour tout outil de montage.
-- `references/common-bugs.md` — catalogue symptôme → cause racine → correction.
-  Lire en premier face à un bug de lecture ou de synchro.
-- `assets/playback-engine.ts` — implémentation de référence du moteur, à adapter
-  dans le projet Next.js.
+- `references/playback-engine.md` — Hauptuhr, Auflöser, Vorrat an `<video>`, Nachführung
+  bei Abweichung, Vorladen. Für jede Arbeit an der Wiedergabe zu lesen.
+- `references/timeline-model.md` — Datenmodell, Zeit in Einzelbildern und die
+  Schnittoperationen (Trennen, Trimmen, Ripple, Roll, Slip, Slide) als reine Umformungen.
+  Für jedes Schnittwerkzeug zu lesen.
+- `references/common-bugs.md` — Katalog Symptom, Ursache, Behebung. Bei einem Fehler in
+  Wiedergabe oder Synchronität zuerst zu lesen.
+- `assets/playback-engine.ts` — Referenzumsetzung der Engine, im Next.js-Projekt anzupassen.

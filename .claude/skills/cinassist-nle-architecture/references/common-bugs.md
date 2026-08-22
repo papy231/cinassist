@@ -1,89 +1,87 @@
-# Catalogue des bugs récurrents
+# Katalog der wiederkehrenden Fehler
 
-À lire **en premier** face à un bug de lecture ou de synchro. Presque tous les
-symptômes de CinAssist remontent à une poignée de causes racines. Corriger la
-cause, pas le symptôme.
+**Zuerst** lesen, wenn ein Fehler bei Wiedergabe oder Synchronisation auftritt. Fast alle
+Symptome in CinAssist gehen auf eine Handvoll Ursachen zurück. Die Ursache beheben,
+nicht das Symptom.
 
-Format : **Symptôme → Cause racine → Correction**.
+Aufbau: **Symptom → Ursache → Behebung**.
 
 ---
 
-## Playhead saccadé / qui avance par à-coups
-**Cause :** le playhead est déplacé depuis `video.timeupdate` (≈ 4 Hz) ou depuis
-un état React mis à jour trop rarement.
-**Correction :** piloter le playhead depuis la `MasterClock` en
-`requestAnimationFrame` (60 fps). Le playhead lit `currentFrame`, jamais
-`video.currentTime`. Pour la position en pixels : `(currentFrame / fps) *
-pixelsParSeconde`.
+## Abspielkopf ruckelt oder springt stoßweise
+**Ursache:** Der Abspielkopf wird aus `video.timeupdate` (etwa 4 Hz) bewegt oder aus einem
+React-Zustand, der zu selten aktualisiert wird.
+**Behebung:** Den Abspielkopf aus der `MasterClock` mit `requestAnimationFrame` (60 fps)
+führen. Er liest `currentFrame`, niemals `video.currentTime`. Für die Position in Pixeln:
+`(currentFrame / fps) * pixelProSekunde`.
 
-## Timeline et player désynchronisés
-**Cause :** deux sources de vérité concurrentes — le temps de la `<video>` **et**
-le temps de la timeline se disputent qui commande.
-**Correction :** une seule horloge maîtresse. La `<video>` suit `t` (et se
-corrige par drift) ; elle ne dicte jamais `t`. Supprimer tout code où
-`video.currentTime` met à jour l'état de la timeline.
+## Timeline und Abspieler laufen auseinander
+**Ursache:** Zwei konkurrierende Wahrheitsquellen — die Zeit der `<video>` **und** die Zeit
+der Timeline streiten darum, wer führt.
+**Behebung:** Nur eine Hauptuhr. Die `<video>` folgt `t` (und wird über die Abweichung
+nachgeführt), sie gibt `t` niemals vor. Jede Stelle entfernen, an der
+`video.currentTime` den Zustand der Timeline setzt.
 
-## Trous noirs aux changements de clip
-**Cause :** un seul `<video>` dont on change `src` à la coupe ; le chargement +
-seek asynchrones laissent une frame noire.
-**Correction :** pool de 2 `<video>` + préchargement du clip suivant dans le
-standby (~1 s à l'avance), puis bascule instantanée. Voir
+## Schwarze Löcher beim Clipwechsel
+**Ursache:** Eine einzige `<video>`, deren `src` an der Schnittstelle gewechselt wird. Laden
+und Springen laufen asynchron und hinterlassen ein schwarzes Bild.
+**Behebung:** Vorrat aus zwei `<video>` und Vorladen des nächsten Clips im Wartestand
+(etwa eine Sekunde im Voraus), danach sofortiger Wechsel. Siehe
 `playback-engine.md` §3.
 
-## Lecture qui hache / micro-freezes constants
-**Cause :** on force `video.currentTime = …` à chaque frame en lecture → re-seek
-permanent.
-**Correction :** en lecture, laisser la `<video>` jouer seule ; ne recaler que si
-`|video.currentTime − sourceVoulu| > seuil` (~0.15 s). Voir §4 du moteur.
+## Wiedergabe hakt, ständige Mikroaussetzer
+**Ursache:** `video.currentTime` wird während der Wiedergabe in jedem Bild gesetzt, was
+ein dauerndes Neuspringen auslöst.
+**Behebung:** Während der Wiedergabe die `<video>` allein laufen lassen und nur
+nachführen, wenn `|video.currentTime − gewünschteQuellzeit|` einen Schwellwert von etwa
+0,15 s überschreitet. Siehe §4 der Wiedergabe-Engine.
 
-## Trou noir après un seek/scrub (mais pas aux coupes)
-**Cause :** le clip cible n'était pas préchauffé ; chargement direct dans
-l'`active`.
-**Correction :** comportement en partie inévitable après un saut arbitraire.
-Atténuer en affichant la dernière frame connue jusqu'à ce que la nouvelle soit
-prête (`readyState ≥ 2`), plutôt que du noir. Pour un scrub, n'afficher la frame
-exacte qu'au relâchement.
+## Schwarzes Bild nach einem Sprung oder Scrub, aber nicht an den Schnitten
+**Ursache:** Der Zielclip war nicht vorgewärmt und wird unmittelbar in die aktive
+`<video>` geladen.
+**Behebung:** Nach einem beliebigen Sprung teilweise unvermeidbar. Abmildern lässt es sich,
+indem das zuletzt bekannte Bild stehen bleibt, bis das neue bereit ist (`readyState >= 2`),
+statt Schwarz zu zeigen. Beim Scrub das genaue Bild erst beim Loslassen darstellen.
 
-## Le playhead « saute » ou l'image est en avance/retard d'une frame
-**Cause :** temps stocké en secondes flottantes → drift ; ou confusion
-frame/seconde dans une conversion.
-**Correction :** stocker tout le temps en frames entières ; convertir en secondes
-seulement au contact de la `<video>` et de l'affichage. Vérifier les `round()`.
+## Der Abspielkopf springt, oder das Bild eilt um ein Einzelbild vor oder nach
+**Ursache:** Die Zeit wird als Gleitkommazahl in Sekunden gehalten und driftet, oder eine
+Umrechnung verwechselt Einzelbild und Sekunde.
+**Behebung:** Alle Zeiten als ganze Einzelbilder halten und erst im Kontakt mit der
+`<video>` und der Anzeige in Sekunden umrechnen. Die `round()`-Aufrufe prüfen.
 
-## Après un split/trim, la mauvaise portion de vidéo s'affiche
-**Cause :** `sourceIn` non recalculé lors du découpage. La partie droite d'un
-split doit décaler son `sourceIn`.
-**Correction :** appliquer le mapping — pour la partie droite d'un split à `t` :
-`sourceIn = clip.sourceIn + (t − clip.timelineStart)`. Voir `timeline-model.md`.
+## Nach Trennen oder Trimmen erscheint der falsche Ausschnitt
+**Ursache:** `sourceIn` wurde beim Schneiden nicht neu berechnet. Der rechte Teil einer
+Trennung muss sein `sourceIn` verschieben.
+**Behebung:** Die Abbildung anwenden — für den rechten Teil einer Trennung bei `t` gilt
+`sourceIn = clip.sourceIn + (t − clip.timelineStart)`. Siehe `timeline-model.md`.
 
-## L'audio dérive de la vidéo sur les longs clips
-**Cause :** audio et vidéo pilotés par deux horloges indépendantes, ou seuil de
-drift trop laxiste pour l'audio.
-**Correction :** aligner l'audio sur la `MasterClock` avec un seuil de recalage
-plus fin que la vidéo ; planifier l'audio sur l'horloge du contexte audio.
+## Ton läuft bei langen Clips gegenüber dem Bild weg
+**Ursache:** Ton und Bild werden von zwei unabhängigen Uhren geführt, oder der Schwellwert
+für die Nachführung ist für den Ton zu großzügig.
+**Behebung:** Den Ton an der `MasterClock` ausrichten, mit einem feineren Schwellwert als
+beim Bild, und ihn auf der Uhr des Audiokontexts planen.
 
-## Le clip se remet à zéro / rejoue depuis le début à la frontière
-**Cause :** à la bascule, le nouveau `<video>` n'a pas été seeké à `sourceIn` (ou
-le seek a échoué car `readyState` trop bas au moment du préchargement).
-**Correction :** au préchargement, seeker sur `loadedmetadata` si les métadonnées
-ne sont pas encore prêtes ; revérifier la position juste après la bascule.
+## Der Clip springt an den Anfang zurück und spielt an der Grenze erneut
+**Ursache:** Beim Wechsel wurde die neue `<video>` nicht auf `sourceIn` gesetzt, oder der
+Sprung schlug fehl, weil `readyState` beim Vorladen noch zu niedrig war.
+**Behebung:** Beim Vorladen auf `loadedmetadata` springen, falls die Metadaten noch nicht
+vorliegen, und die Position unmittelbar nach dem Wechsel erneut prüfen.
 
-## L'onglet en arrière-plan désynchronise tout
-**Cause :** rAF est throttlé/suspendu quand l'onglet est masqué, mais la `<video>`
-peut continuer différemment.
-**Correction :** l'horloge basée sur `performance.now()` se recale correctement au
-retour (elle mesure le temps réel écoulé). Mettre la lecture en pause sur
-`visibilitychange` si un comportement strict est souhaité.
+## Ein Tab im Hintergrund bringt alles aus dem Tritt
+**Ursache:** `requestAnimationFrame` wird gedrosselt oder ausgesetzt, sobald der Tab
+verdeckt ist, während die `<video>` sich anders verhalten kann.
+**Behebung:** Eine Uhr auf Grundlage von `performance.now()` findet beim Zurückkehren von
+selbst wieder zusammen, weil sie die tatsächlich vergangene Zeit misst. Wer strenges
+Verhalten möchte, hält die Wiedergabe bei `visibilitychange` an.
 
 ---
 
-## Démarche générale de diagnostic
+## Allgemeines Vorgehen bei der Fehlersuche
 
-1. **Quelle couche ?** (modèle / horloge / compositeur). Un bug de « mauvaise
-   image » est souvent modèle (mapping) ; un bug de « fluidité » est horloge ;
-   un bug de « noir/chargement » est compositeur.
-2. **La règle d'or est-elle respectée ?** Chercher tout endroit où
-   `video.currentTime` influence l'état de la timeline → c'est presque toujours
-   là qu'est le bug.
-3. **Frames ou secondes ?** Traquer les conversions et les `float` qui traînent
-   là où il devrait y avoir des frames entières.
+1. **Welche Schicht?** (Modell, Uhr oder Compositor). Ein falsches Bild deutet meist auf
+   das Modell und seine Abbildung, ruckelnde Bewegung auf die Uhr, Schwarzbild und
+   Ladeprobleme auf den Compositor.
+2. **Ist die Grundregel eingehalten?** Jede Stelle suchen, an der `video.currentTime` den
+   Zustand der Timeline beeinflusst. Dort liegt fast immer der Fehler.
+3. **Einzelbilder oder Sekunden?** Die Umrechnungen prüfen und die Gleitkommazahlen
+   aufspüren, die dort stehen, wo ganze Einzelbilder stehen müssten.

@@ -1,55 +1,56 @@
-# Modèle de timeline et opérations d'édition
+# Timeline-Modell und Schnittoperationen
 
-Détail de la couche **Modèle** — la source de vérité. Principe directeur : chaque
-opération de montage est une **transformation pure du modèle**. Elle ne touche
-jamais la `<video>` ni l'horloge. Une fois le modèle modifié, le compositeur
-affiche automatiquement le bon résultat au prochain tick.
+Ausführlich zur Schicht **Modell**, der Wahrheitsquelle. Leitgedanke: Jede Schnittoperation
+ist eine **reine Umformung des Modells**. Sie fasst weder die `<video>` noch die Uhr an.
+Sobald das Modell geändert ist, zeigt der Compositor beim nächsten Takt von selbst das
+richtige Ergebnis.
 
-## Sommaire
-1. Structure de données
-2. Le temps en frames entières
-3. Les opérations d'édition
-4. Invariants à préserver
+## Inhalt
+1. Datenstruktur
+2. Zeit in ganzen Einzelbildern
+3. Die Schnittoperationen
+4. Zu wahrende Invarianten
 
 ---
 
-## 1. Structure de données
+## 1. Datenstruktur
 
 ```ts
-type Frames = number; // temps en frames ENTIÈRES
+type Frames = number; // Zeit in GANZEN Einzelbildern
 
 interface Clip {
   id: string;
-  src: string;            // média source
-  sourceIn: Frames;       // point d'entrée DANS le source
-  timelineStart: Frames;  // position SUR la timeline
-  duration: Frames;       // durée sur la timeline
+  src: string;            // Quellmedium
+  sourceIn: Frames;       // Einstiegspunkt IM Quellmedium
+  timelineStart: Frames;  // Position AUF der Timeline
+  duration: Frames;       // Dauer auf der Timeline
 }
 
-interface Track { id: string; clips: Clip[]; } // triés, sans chevauchement
+interface Track { id: string; clips: Clip[]; } // sortiert, ohne Überschneidung
 interface Timeline { fps: number; tracks: Track[]; }
 ```
 
-Notes :
-- Il n'y a **pas** de champ `sourceOut` : il se déduit (`sourceIn + duration`).
-  Un seul champ à maintenir = un invariant de moins à casser.
-- `src` peut pointer plusieurs fois vers le même fichier (un même média découpé
-  en plusieurs clips) : c'est normal et voulu.
+Hinweise:
+- Ein Feld `sourceOut` gibt es **nicht**, es ergibt sich aus `sourceIn + duration`.
+  Ein Feld weniger zu pflegen heißt eine Invariante weniger, die brechen kann.
+- `src` darf mehrfach auf dieselbe Datei zeigen, wenn ein Medium in mehrere Clips
+  zerlegt ist. Das ist normal und beabsichtigt.
 
-## 2. Le temps en frames entières
+## 2. Zeit in ganzen Einzelbildern
 
-Tout le temps interne est en frames entières. Raisons :
-- Les `float` en secondes accumulent du drift → erreurs d'un demi-frame qui
-  cassent la synchro et rendent les coupes imprécises.
-- Les frames sont l'unité naturelle d'un NLE : une coupe tombe *sur* une frame.
+Alle internen Zeiten sind ganze Einzelbilder. Die Gründe:
+- Gleitkommazahlen in Sekunden häufen Abweichungen an. Fehler von einem halben Einzelbild
+  zerstören die Synchronität und machen Schnitte unpräzise.
+- Das Einzelbild ist die natürliche Einheit eines Schnittsystems: Ein Schnitt liegt
+  *auf* einem Einzelbild.
 
-Conversion, uniquement aux frontières du système :
+Umgerechnet wird nur an den Rändern des Systems:
 ```
-secondes = frames / fps            // vers <video>.currentTime et affichage
-frames   = round(secondes * fps)   // depuis une entrée en secondes
+sekunden = frames / fps            // zu <video>.currentTime und zur Anzeige
+frames   = round(sekunden * fps)   // aus einer Eingabe in Sekunden
 ```
 
-Timecode d'affichage `HH:MM:SS:FF` :
+Zeitcode zur Anzeige `HH:MM:SS:FF`:
 ```
 FF = frames % fps
 SS = floor(frames / fps) % 60
@@ -57,69 +58,71 @@ MM = floor(frames / (fps*60)) % 60
 HH = floor(frames / (fps*3600))
 ```
 
-## 3. Les opérations d'édition
+## 3. Die Schnittoperationen
 
-Chacune prend le modèle (ou une piste) et renvoie un nouveau modèle. Écrire ces
-opérations **immuables** (retourner de nouveaux objets) facilite l'undo/redo :
-l'historique n'est qu'une pile d'états (ou de patches) du modèle.
+Jede nimmt das Modell (oder eine Spur) und liefert ein neues Modell zurück. Werden diese
+Operationen **unveränderlich** geschrieben, also mit neuen Objekten als Ergebnis, wird
+Rückgängig und Wiederholen einfach: Die Historie ist dann nur ein Stapel von Zuständen
+oder Änderungssätzen des Modells.
 
-### Split (couper au playhead)
-À la frame `t`, sur le clip actif : le remplacer par deux clips.
+### Trennen (am Abspielkopf schneiden)
+Beim Einzelbild `t` wird der aktive Clip durch zwei Clips ersetzt.
 ```
-gauche  = { ...clip, duration: t − clip.timelineStart }
-droite  = { ...clip,
-            sourceIn:      clip.sourceIn + (t − clip.timelineStart),
-            timelineStart: t,
-            duration:      clip.duration − (t − clip.timelineStart) }
+links  = { ...clip, duration: t − clip.timelineStart }
+rechts = { ...clip,
+           sourceIn:      clip.sourceIn + (t − clip.timelineStart),
+           timelineStart: t,
+           duration:      clip.duration − (t − clip.timelineStart) }
 ```
-Noter le décalage de `sourceIn` sur la partie droite — c'est le §mapping
-fondamental appliqué au découpage.
+Zu beachten ist die Verschiebung von `sourceIn` im rechten Teil. Das ist die grundlegende
+Abbildung, angewandt auf den Schnitt.
 
-### Trim (rogner un bord)
-Déplacer le bord d'entrée ou de sortie d'un clip **sans** décaler les voisins
-(laisse un trou ou un chevauchement selon le mode).
-- Trim d'entrée de `Δ` frames : `sourceIn += Δ`, `timelineStart += Δ`,
+### Trimmen (eine Kante beschneiden)
+Verschiebt die Eingangs- oder Ausgangskante eines Clips, **ohne** die Nachbarn zu
+verschieben. Je nach Modus bleibt eine Lücke oder es entsteht eine Überschneidung.
+- Eingang um `Δ` Einzelbilder trimmen: `sourceIn += Δ`, `timelineStart += Δ`,
   `duration −= Δ`.
-- Trim de sortie de `Δ` : `duration += Δ` (borné par le média disponible).
+- Ausgang um `Δ` trimmen: `duration += Δ`, begrenzt durch das verfügbare Medium.
 
-### Ripple (rogner + refermer)
-Un trim d'entrée/sortie suivi d'un **décalage de tous les clips suivants** de la
-même piste pour combler/absorber le trou. C'est le trim « qui pousse » : la durée
-totale de la séquence change.
+### Ripple (trimmen und schließen)
+Ein Trimmen an Ein- oder Ausgang, gefolgt vom **Verschieben aller nachfolgenden Clips**
+derselben Spur, um die Lücke zu schließen oder aufzunehmen. Das ist das schiebende
+Trimmen: Die Gesamtdauer der Sequenz ändert sich.
 
-### Roll (déplacer une coupe)
-Sur deux clips adjacents A|B : allonger A de `Δ` et raccourcir B de `Δ` (ou
-l'inverse). La frontière bouge, la durée totale ne change pas. C'est un trim de
-sortie sur A + un trim d'entrée sur B, liés.
+### Roll (einen Schnitt verschieben)
+Bei zwei benachbarten Clips A|B wird A um `Δ` verlängert und B um `Δ` verkürzt oder
+umgekehrt. Die Grenze wandert, die Gesamtdauer bleibt gleich. Das ist ein Ausgangstrimmen
+an A und ein Eingangstrimmen an B, miteinander verbunden.
 
-### Slip (glisser le contenu)
-Changer *ce qu'on voit* d'un clip sans changer sa position ni sa durée sur la
-timeline : `sourceIn += Δ` seulement (borné par le média). La fenêtre source
-glisse, la fente timeline reste identique.
+### Slip (den Inhalt verschieben)
+Ändert, *was zu sehen ist*, ohne Position und Dauer auf der Timeline zu verändern:
+nur `sourceIn += Δ`, begrenzt durch das Medium. Das Fenster im Quellmedium wandert, der
+Platz auf der Timeline bleibt derselbe.
 
-### Slide (glisser la position)
-Déplacer un clip le long de la timeline en ajustant les deux voisins : le clip
-garde son contenu et sa durée, `timelineStart += Δ`, le voisin gauche gagne `Δ`,
-le voisin droit perd `Δ` (ou l'inverse).
+### Slide (die Position verschieben)
+Verschiebt einen Clip entlang der Timeline und passt beide Nachbarn an. Der Clip behält
+Inhalt und Dauer, `timelineStart += Δ`, der linke Nachbar gewinnt `Δ`, der rechte verliert
+`Δ` oder umgekehrt.
 
-### Move / drag-and-drop
-Changer `timelineStart` (et éventuellement de piste). Décider la politique de
-collision : écraser, insérer (ripple), ou refuser.
+### Verschieben und Ablegen
+Ändert `timelineStart` und gegebenenfalls die Spur. Die Regel bei Überschneidung ist zu
+entscheiden: überschreiben, einfügen (Ripple) oder ablehnen.
 
-## 4. Invariants à préserver
+## 4. Zu wahrende Invarianten
 
-Après **toute** opération, vérifier (idéalement via une fonction `normalize()`
-appelée en fin d'opération) :
+Nach **jeder** Operation ist zu prüfen, am besten über eine Funktion `normalize()`, die am
+Ende jeder Operation aufgerufen wird:
 
-- **Clips triés** par `timelineStart` sur chaque piste.
-- **Pas de chevauchement** sur une même piste (sauf zones de transition, gérées à
-  part).
-- **Bornes du média** : `sourceIn ≥ 0` et `sourceIn + duration ≤` durée du média
-  source. On ne peut pas montrer des frames qui n'existent pas.
-- **Durée > 0** : supprimer les clips de durée nulle produits par un trim/split.
-- **`fps` cohérent** : si un média a un fps différent de la séquence, décider tôt
-  la politique (conformer, ou convertir les frames à la volée). Ne pas laisser
-  deux référentiels de frames se mélanger silencieusement.
+- **Clips sortiert** nach `timelineStart` auf jeder Spur.
+- **Keine Überschneidung** innerhalb einer Spur, ausgenommen Übergangsbereiche, die
+  gesondert behandelt werden.
+- **Grenzen des Mediums**: `sourceIn >= 0` und `sourceIn + duration <=` Dauer des
+  Quellmediums. Einzelbilder, die es nicht gibt, lassen sich nicht zeigen.
+- **Dauer größer als null**: Clips mit Dauer null, die beim Trimmen oder Trennen entstehen,
+  werden entfernt.
+- **Stimmige `fps`**: Hat ein Medium eine andere Bildrate als die Sequenz, ist die Regel
+  früh festzulegen, also entweder anpassen oder die Einzelbilder zur Laufzeit umrechnen.
+  Zwei Bezugssysteme dürfen sich nicht stillschweigend vermischen.
 
-Tant que ces invariants tiennent, le compositeur affiche toujours quelque chose
-de correct — parce qu'il ne fait que lire le modèle.
+Solange diese Invarianten halten, zeigt der Compositor immer etwas Richtiges an, denn er
+tut nichts anderes, als das Modell zu lesen.
