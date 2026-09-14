@@ -3496,6 +3496,18 @@ export default function Editor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clips.length]);
 
+  /** Gesamtansicht: die ganze Timeline im Fenster (wie Cmd 0), Spuren nach oben gescrollt.
+   *  Wird nach jedem Laden einer Timeline aufgerufen, damit der Einstieg ins Projekt
+   *  sofort den Überblick zeigt statt eines beliebigen Ausschnitts. */
+  const zeigeGesamtansicht = (list: TLClip[]) => {
+    const ende = list.reduce((m, c) => Math.max(m, c.start + c.duration), 0);
+    setZoom(ende > 0 ? clamp(Math.max(MIN_TIMELINE_DURATION, ende) / ende, MIN_ZOOM, MAX_ZOOM) : 1);
+    requestAnimationFrame(() => {
+      const el = timelineRef.current;
+      if (el) { el.scrollLeft = 0; el.scrollTop = 0; }
+    });
+  };
+
   const loadTimeline = async (timelineId: string, leise = false) => {
     try {
       const r = await fetch(`${API}/api/timelines/${timelineId}`);
@@ -3579,6 +3591,7 @@ export default function Editor() {
       setSelectedTlIds(new Set());
       seekSeconds(0);
       pause();
+      zeigeGesamtansicht(loaded);
       setProjectName(t.name || projectName);
       setHistOpen(false);
       setSaveStatus("saved");
@@ -5171,8 +5184,8 @@ export default function Editor() {
           PanelGroup vertical (haut/bas) → à l'intérieur du haut, PanelGroup
           horizontal (viewer | médias). autoSaveId persiste les tailles en
           localStorage. */}
-      <PanelGroup direction="vertical" autoSaveId="cinassist-main-layout" style={{ flex: 1, minHeight: 0 }}>
-        <Panel defaultSize={62} minSize={30} style={{ minHeight: 0 }}>
+      <PanelGroup direction="vertical" autoSaveId="cinassist-main-layout-v2" style={{ flex: 1, minHeight: 0 }}>
+        <Panel defaultSize={54} minSize={30} style={{ minHeight: 0 }}>
           <PanelGroup direction="horizontal" autoSaveId="cinassist-top-layout-v2" style={{ height: "100%" }}>
             {/* Inspector-Panel (GAUCHE) — propriétés du clip sélectionné */}
             <Panel
@@ -5994,7 +6007,7 @@ export default function Editor() {
           </div>
         </PanelResizeHandle>
 
-        <Panel defaultSize={38} minSize={20} style={{ minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <Panel defaultSize={46} minSize={20} style={{ minHeight: 0, display: "flex", flexDirection: "column" }}>
       {/* ─── Werkzeugleiste (Wave 1 : Pro-Toolbar) ─── */}
       <div style={{ height: 56, flex: "none", display: "flex", alignItems: "center", padding: "0 14px", gap: 3, borderTop: "1px solid #1a1a1c" }}>
         {/* Gruppe 1 — Auswahl */}

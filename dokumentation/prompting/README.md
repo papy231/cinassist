@@ -4,7 +4,7 @@ Belegt, wie der Prototyp entstanden ist. Gehört zu Abschnitt 5.9 der Bachelorar
 
 | Datei | Inhalt |
 |---|---|
-| `nutzer-eingaben_deutsch.md` | die 53 Eingaben des Verfassers in deutscher Übersetzung, in ihrer Reihenfolge, je mit ihrer Kategorie |
+| `nutzerprompts.md` | die 53 Eingaben des Verfassers in deutscher Übersetzung, in ihrer Reihenfolge, je mit ihrer Kategorie |
 | `sitzungsjournal_RAW.jsonl` | vollständiges maschinenlesbares Journal der Arbeitsphase, Primärquelle der ausgezählten Zahlen |
 
 Die Entwicklung wurde auf Französisch geführt, der Arbeitssprache des Verfassers. Die
