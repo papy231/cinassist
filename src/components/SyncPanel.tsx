@@ -230,6 +230,10 @@ export default function SyncPanel({ onAnalyseGestartet }: { onAnalyseGestartet?:
   const [vorschauLaeuft, setVorschauLaeuft] = useState<Set<string>>(new Set());
   const [schrittOffen, setSchrittOffen] = useState<1 | 2 | 3>(1);
   const geladen = useRef(false);
+  // Bis die erste Antwort da ist, zeigt die Ansicht „Lädt …“ statt der leeren Startansicht.
+  // Sonst blitzen auf einem langsamen Server kurz die zwei Kacheln auf, obwohl längst
+  // Ordner und Takes vorhanden sind.
+  const [erstesLaden, setErstesLaden] = useState(true);
 
   const laden = useCallback(async () => {
     try {
@@ -240,6 +244,7 @@ export default function SyncPanel({ onAnalyseGestartet }: { onAnalyseGestartet?:
         setSchrittOffen(t.takes.length > 0 ? 3 : a.length > 0 ? 2 : 1);
       }
     } catch (e) { setFehler(`Backend nicht erreichbar oder Fehler: ${(e as Error).message}`); }
+    finally { setErstesLaden(false); }
   }, []);
   useEffect(() => { void laden(); }, [laden]);
 
@@ -350,7 +355,7 @@ export default function SyncPanel({ onAnalyseGestartet }: { onAnalyseGestartet?:
     return q ? audios.filter((a) => a.dateiname.toLowerCase().includes(q) || (a.tc_start ?? "").includes(q)) : audios;
   }, [audios, rattachSuche]);
 
-  const leer = importe.length === 0 && takes.length === 0 && Object.keys(jobs).length === 0;
+  const leer = !erstesLaden && importe.length === 0 && takes.length === 0 && Object.keys(jobs).length === 0;
   const videoImporte = importe.filter((i) => i.typ === "video");
   const audioImporte = importe.filter((i) => i.typ === "audio");
   const hatVideos = assets.some((a) => a.typ === "video");
@@ -476,6 +481,15 @@ export default function SyncPanel({ onAnalyseGestartet }: { onAnalyseGestartet?:
         </div>
       )}
 
+      {/* Ladeanzeige: erste Antwort des Backends steht noch aus */}
+      {erstesLaden && (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, color: MUTED }}>
+          <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke={ACCENT} strokeWidth={2.2} strokeLinecap="round" strokeDasharray="14 42" style={{ animation: "spin 0.9s linear infinite" }}><circle cx="12" cy="12" r="9" /></svg>
+          <div style={{ fontSize: 15 }}>Synchronisation wird geladen …</div>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>Ordner, Takes und Zuordnungen werden vom Server geholt.</div>
+        </div>
+      )}
+
       {/* Startansicht: nichts importiert → zwei große Kacheln, kein Jargon */}
       {leer && (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 18, textAlign: "center" }}>
@@ -512,7 +526,7 @@ export default function SyncPanel({ onAnalyseGestartet }: { onAnalyseGestartet?:
       )}
 
       {/* Schritt 1 + 2 nebeneinander */}
-      {!leer && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+      {!leer && !erstesLaden && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
         {(["video", "audio"] as const).map((typ) => {
           const liste = typ === "video" ? videoImporte : audioImporte;
           const n = assets.filter((a) => a.typ === typ).length;
@@ -567,7 +581,7 @@ export default function SyncPanel({ onAnalyseGestartet }: { onAnalyseGestartet?:
       </div>}
 
       {/* Schritt 3 */}
-      {!leer && <div style={{ ...karte, flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8 }}>
+      {!leer && !erstesLaden && <div style={{ ...karte, flex: 1, minHeight: 0, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <b style={{ color: ACCENT }}>3 · Prüfen & in Medien übernehmen</b>
           {takes.length > 0 && (["sicher", "plausibel", "unklar", "verwaist", "manuell_bestaetigt", "manuell_abgelehnt"] as TakeStatus[]).map((s) => (
