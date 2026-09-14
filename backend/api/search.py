@@ -64,7 +64,10 @@ async def _rewrite_query(query: str) -> str:
         f"Anfrage: {q}\n"
     )
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        # 25s statt 10s: llama3 braucht beim ersten Aufruf (Modell-Cold-Start) ~15s,
+        # danach ~7s. Bei 10s lief die erste Anfrage jeder neuen Query immer ins Timeout
+        # → Fallback auf Rohtext, schlechtere CLIP-Treffer.
+        async with httpx.AsyncClient(timeout=25) as client:
             r = await client.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
                 json={"model": REWRITE_MODEL, "prompt": prompt, "format": "json", "stream": False, "options": {"temperature": 0.4}},
@@ -430,8 +433,10 @@ async def search_scenes(
     else:
         # Zuerst exakte Dialog-Treffer (nach Textscore, dann Zeit), danach der Rest nach kombiniertem Score.
         d_idx = sorted(dialog.keys(), key=lambda i: (-float(text_scores[i]), scenes[i].clip.dateiname if scenes[i].clip else "", scenes[i].start_zeit))
-        # Visuelle Auffüller nur, wenn CLIP wirklich etwas erkennt (≥ 0,22) — sonst wären es Zufallstreffer.
-        rest = [int(i) for i in np.argsort(combined)[::-1] if int(i) not in dialog and float(clip_scores[int(i)]) >= 0.22]
+        # Visuelle Auffüller nur, wenn CLIP wirklich etwas erkennt — sonst wären es Zufallstreffer.
+        # Schwelle an ViT-L-14/datacomp angepasst: dessen Kosinuswerte liegen deutlich niedriger
+        # (typisch 0.05–0.15) als beim früheren ViT-B-32/openai (0.25–0.35). 0.22 war unerreichbar.
+        rest = [int(i) for i in np.argsort(combined)[::-1] if int(i) not in dialog and float(clip_scores[int(i)]) >= 0.10]
         order = d_idx + ([] if req.modus == "dialog" else rest)
 
     results: list[SearchResult] = []
@@ -449,7 +454,7 @@ async def search_scenes(
         z, w, sn, pw = dialog.get(idx, ([], None, None, None))
         results.append(SearchResult(
             treffer_konfidenz=pw,
-            treffer_art=("beides" if ist_dialog and float(clip_scores[idx]) >= 0.25 else "dialog" if ist_dialog else "visuell"),
+            treffer_art=("beides" if ist_dialog and float(clip_scores[idx]) >= 0.12 else "dialog" if ist_dialog else "visuell"),
             treffer_zeit=(z[0] if z else None),
             treffer_wort=w,
             treffer_snippet=sn,
