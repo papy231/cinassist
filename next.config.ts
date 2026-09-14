@@ -30,6 +30,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       { source: "/api/:path*",     destination: `${BACKEND}/api/:path*` },
+      // /health muss ans Backend weitergereicht werden: checkHealth() im Frontend
+      // ruft ${API}/health auf. Ohne diesen Rewrite landete /health bei Next (404),
+      // der Client wertete das als "Backend offline" — obwohl das Backend lief.
+      { source: "/health",         destination: `${BACKEND}/health` },
       { source: "/uploads/:path*", destination: `${BACKEND}/uploads/:path*` },
       { source: "/proxies/:path*", destination: `${BACKEND}/proxies/:path*` },
       { source: "/outputs/:path*", destination: `${BACKEND}/outputs/:path*` },
