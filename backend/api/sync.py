@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -188,6 +189,11 @@ async def _neuer_job(db: AsyncSession, typ: str, nachricht: str, clip_id=None) -
 
 _BROWSE_WURZELN = ["/Volumes", str(Path.home()), str(Path.home() / "Movies"), str(Path.home() / "Desktop"),
                    str(Path.home() / "Downloads")]
+# Zusätzliche Einstiegspunkte für den Ordner-Browser, z. B. das Rohmaterial eines Projekts
+# auf einem Server: CINASSIST_MATERIAL_ORDNER="/Volumes/SSD 2TB/SHORTCUT 24" (mehrere mit ":" trennen).
+# Sie erscheinen zuerst, damit ein Gast den Ordner nicht im Dateisystem suchen muss.
+_MATERIAL_WURZELN = [w for w in os.environ.get("CINASSIST_MATERIAL_ORDNER", "").split(os.pathsep) if w.strip()]
+_BROWSE_WURZELN = _MATERIAL_WURZELN + _BROWSE_WURZELN
 
 
 def _zaehle_medien(ordner: Path, max_tiefe: int = 3, max_dateien: int = 5000) -> tuple[int, int]:
