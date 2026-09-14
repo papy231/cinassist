@@ -6,6 +6,9 @@ import type { NextConfig } from "next";
 const BACKEND = process.env.CINASSIST_BACKEND_URL ?? "http://localhost:8001";
 
 const nextConfig: NextConfig = {
+  // Ausgabeordner wählbar, damit auf einem Server zwei Instanzen (verschiedene Backend-Ports)
+  // aus demselben Checkout gebaut und gestartet werden können: NEXT_DIST_DIR=.next-prof
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   devIndicators: false,
   // Video-Uploads bis 5 GB, dieselbe Grenze wie im FastAPI-Backend. Ohne diese
   // Angabe kappt Next bei 10 MB und der Weiterreichung an /api/clips/upload bricht ab.
