@@ -705,10 +705,28 @@ export default function Editor() {
   /* ─── Load clips + timelines ─── */
   useEffect(() => {
     let cancelled = false;
-    fetch(`${API}/api/clips`)
-      .then((r) => r.json())
+    // Über Tailscale kann eine einzelne Anfrage kurz stolpern. Ohne Wiederholung
+    // hätte ein einmaliger Aussetzer dauerhaft „Backend offline“ gezeigt, obwohl
+    // das Backend längst wieder erreichbar ist. Daher: bis zu 3 Versuche mit
+    // Timeout, und erst danach den Fehler setzen.
+    const ladeClips = async (): Promise<ClipDTO[]> => {
+      let letzterFehler: unknown;
+      for (let versuch = 0; versuch < 3; versuch++) {
+        try {
+          const r = await fetch(`${API}/api/clips`, { signal: AbortSignal.timeout(8000) });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return (await r.json()) as ClipDTO[];
+        } catch (e) {
+          letzterFehler = e;
+          if (versuch < 2) await new Promise((res) => setTimeout(res, 800 * (versuch + 1)));
+        }
+      }
+      throw letzterFehler instanceof Error ? letzterFehler : new Error(String(letzterFehler));
+    };
+    ladeClips()
       .then((data: ClipDTO[]) => {
         if (cancelled) return;
+        setError(null);
         const usable = data.filter((c) => c.status === "analysiert" || c.status === "hochgeladen");
         setClips(usable);
         // Früher (Demo-Modus) wurden hier ALLE Clips automatisch hintereinander auf V1 gelegt.
@@ -6177,6 +6195,14 @@ export default function Editor() {
           ref={timelineWheelRef}
           style={{ flex: 1, position: "relative", padding: "8px 0 10px 0", minWidth: 0, display: "flex" }}
         >
+        {/* Ladeanzeige über der gesamten Spurenfläche, solange die Clips/Timelines
+            noch geladen werden — analog zum „Clips werden geladen…“ in der Vorschau. */}
+        {loading && (
+          <div style={{ position: "absolute", inset: 0, zIndex: 30, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "rgba(15,15,17,0.55)", pointerEvents: "none", color: "#b9d94a", fontSize: 12, fontWeight: 600 }}>
+            <S w={16} c="#b9d94a" sw={2.4} style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>
+            Timeline wird geladen…
+          </div>
+        )}
         {/* ─── Multi-track : colonne d'en-têtes de piste (gauche, fixe) ───
             Suit le scroll vertical de la timeline via translateY (onScroll du
             conteneur de droite). DaVinci-Stil : badge contour + badge plein
