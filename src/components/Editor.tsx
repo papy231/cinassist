@@ -5291,8 +5291,10 @@ export default function Editor() {
             })()}
             {!activeTlClip && (
               <div style={{ position: "absolute", inset: 0, background: "#000" }}>
-                <div style={{ position: "absolute", top: "40%", left: 0, right: 0, textAlign: "center", color: "rgba(255,255,255,0.85)", fontSize: 14, fontWeight: 500 }}>
-                  {loading ? "Clips werden geladen…" : error ? `Backend nicht erreichbar: ${error}` : ""}
+                <div style={{ position: "absolute", top: "40%", left: 0, right: 0, textAlign: "center", color: "rgba(255,255,255,0.85)", fontSize: 14, fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  {loading
+                    ? <><S w={18} c="#b9d94a" sw={2.4} style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>Clips werden geladen…</>
+                    : error ? `Backend nicht erreichbar: ${error}` : ""}
                 </div>
               </div>
             )}
@@ -5787,7 +5789,7 @@ export default function Editor() {
             }}
             style={{ flex: 1, overflow: "auto", padding: "12px 16px", minHeight: 0, position: "relative", userSelect: mediaMarquee ? "none" : "auto", outline: dropTargetActive ? "2px dashed #b9d94a" : "none", outlineOffset: -8, background: dropTargetActive ? "rgba(185,217,74,0.06)" : undefined }}
           >
-            {loading && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>Clips werden geladen…</div>}
+            {loading && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, color: "#7a7a7a", padding: 20, fontSize: 12 }}><S w={13} c="#b9d94a" sw={2.4} style={{ animation: "spin 1s linear infinite" }}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" /></S>Clips werden geladen…</div>}
             {!loading && gridMedia.length === 0 && !error && uploadQueue.length === 0 && unterOrdner.length === 0 && <div style={{ textAlign: "center", color: "#7a7a7a", padding: 20, fontSize: 12 }}>{aktOrdner ? "Dieser Ordner ist leer — Clips per Drag & Drop hierher verschieben." : "Keine Clips — Videos hier hineinziehen, oben „Upload“ klicken oder „Ordner importieren …“."}</div>}
             {error && !loading && <div style={{ textAlign: "center", color: "#e07a7a", padding: 20, fontSize: 11 }}>Backend offline: {error}</div>}
             {uploadQueue.length > 0 && (
