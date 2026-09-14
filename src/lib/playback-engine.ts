@@ -42,6 +42,22 @@ export function resolveClipAt(track: EngineTrack, t: Frames): ActiveClip | null 
   return null;
 }
 
+/**
+ * The next video clip that STARTS strictly after `t` on this track (earliest
+ * such start). Used for look-ahead preloading so the upcoming cut is instant.
+ * Returns null if `t` is on/after the last clip. Clips are not assumed sorted.
+ */
+export function nextVideoClipAfter(track: EngineTrack, t: Frames): EngineClip | null {
+  let best: EngineClip | null = null;
+  for (const clip of track.clips) {
+    if (!clip.src) continue;
+    if (clip.timelineStart > t) {
+      if (!best || clip.timelineStart < best.timelineStart) best = clip;
+    }
+  }
+  return best;
+}
+
 // ─── Master clock (drives EVERYTHING, via rAF) ─────────────────────
 
 /**
@@ -116,10 +132,22 @@ export interface EngineMediaError {
  */
 export class VideoPool {
   private container: HTMLElement;
-  /** One video per unique src. */
+  /** One video per unique src. Map iteration order = LRU order (oldest first,
+   *  most-recently-touched last) — a src is deleted + re-set on touch. */
   private slots = new Map<string, HTMLVideoElement>();
   /** Currently visible video (null if none picked yet). */
   active: HTMLVideoElement | null = null;
+
+  /**
+   * Max number of <video> elements kept decoded at once. Each element in
+   * `preload="auto"` actively decodes → CPU scales with this count. Preloading
+   * EVERY clip of a long timeline pinned Chrome's renderer at ~60% CPU (perf
+   * bug, 2026-09). A sliding LRU window keeps only the active clip + a few
+   * neighbours warm; clips outside the window are evicted and re-created on the
+   * fly by ensureSlot() when scrubbed to (brief black frame — same fallback
+   * that already existed for un-warmed clips). 6 covers active + look-ahead
+   * with headroom while staying cheap. */
+  maxSlots = 6;
 
   // ── Single-source audio state (multi-track, this phase) ────────────
   // Exactly ONE slot is unmuted at a time: the winning video track's clip.
@@ -161,10 +189,47 @@ export class VideoPool {
     return v;
   }
 
+  /** Mark a src as most-recently-used (move to the end of the Map's order). */
+  private touch(src: string) {
+    const v = this.slots.get(src);
+    if (v) {
+      this.slots.delete(src);
+      this.slots.set(src, v);
+    }
+  }
+
+  /** Evict least-recently-used slots until at most `maxSlots` remain. Never
+   *  evicts the active slot (it's touched on every render, so it's last in
+   *  order — but guard anyway). */
+  private evictIfNeeded() {
+    while (this.slots.size > this.maxSlots) {
+      // First (oldest) entry in insertion/touch order.
+      const oldest = this.slots.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      const v = this.slots.get(oldest);
+      if (v && v === this.active) {
+        // Active is somehow at the front — re-touch and stop to avoid killing it.
+        this.touch(oldest);
+        break;
+      }
+      if (v) {
+        v.pause();
+        v.removeAttribute("src");
+        v.load(); // release the decoder/buffers, not just detach
+        v.remove();
+      }
+      this.slots.delete(oldest);
+    }
+  }
+
   /** Get or create a slot for this src. Also seeks it to sourceSeconds if fresh. */
   private ensureSlot(src: string, sourceSeconds: number): HTMLVideoElement {
     let v = this.slots.get(src);
-    if (!v) {
+    if (v) {
+      this.touch(src); // mark as recently used → survives eviction
+      return v;
+    }
+    {
       v = this.makeVideo(src);
       this.container.append(v);
       this.slots.set(src, v);
@@ -210,20 +275,33 @@ export class VideoPool {
       }, 8000);
       // Check immédiat (cache hit).
       onProgress();
+      // New slot added → enforce the sliding LRU window (evict oldest).
+      this.evictIfNeeded();
     }
     return v;
   }
 
   /**
-   * Warm the pool: create + preload a slot per unique clip. Idempotent.
-   * Removes slots for srcs no longer in the timeline (drop obsolete clips).
+   * Warm the pool: preload a slot for the FIRST clips of the timeline (up to
+   * maxSlots), not every clip. Previously every unique clip got an eagerly-
+   * decoded <video>, which pinned Chrome's renderer at ~60% CPU on long
+   * timelines (perf bug, 2026-09). The remaining clips are created on demand by
+   * ensureSlot() as the playhead reaches them, and old slots are evicted (LRU),
+   * so at most ~maxSlots elements ever decode at once. Idempotent. Removes slots
+   * for srcs no longer in the timeline (drop obsolete clips).
    */
   warm(clips: Array<{ src: string; sourceInSec: number }>) {
     const wanted = new Set<string>();
+    let warmed = 0;
     for (const c of clips) {
       if (!c.src) continue;
       wanted.add(c.src);
-      this.ensureSlot(c.src, c.sourceInSec);
+      // Only pre-create the initial window; the rest come in lazily. Already-
+      // existing slots (e.g. after an edit) are always refreshed/kept.
+      if (this.slots.has(c.src) || warmed < this.maxSlots) {
+        this.ensureSlot(c.src, c.sourceInSec);
+        warmed++;
+      }
     }
     // Drop slots no longer in the timeline (avoid unbounded memory growth).
     for (const [src, v] of this.slots) {
@@ -270,6 +348,13 @@ export class VideoPool {
     const on = src === this.unmutedSrc && !this.masterMuted;
     v.muted = !on;
     v.volume = this.masterVolume;
+  }
+
+  /** Warm a single upcoming src without making it visible/active (look-ahead so
+   *  the next cut is a pure opacity swap). Touches LRU + evicts as usual. */
+  preload(src: string, sourceSeconds: number) {
+    if (!src) return;
+    this.ensureSlot(src, sourceSeconds);
   }
 
   /** Hide the active (used when the timeline has a real gap → intentional black). */
@@ -656,10 +741,22 @@ export class PlaybackEngine {
       this.lastDriftMs = null;
     }
 
-    // preloadLookahead is retained for future use (e.g. LRU-cache growth on
-    // dynamic timelines) but the multi-slot pool already keeps every clip
-    // warmed up-front — no per-tick preload needed for the common case.
-    void this.preloadLookahead;
+    // Look-ahead: warm the NEXT clip on the winning track so the upcoming cut is
+    // a pure opacity swap (zero load latency). The pool no longer preloads every
+    // clip up-front (perf bug: ~60% CPU); this keeps playback smooth while only
+    // ~maxSlots elements decode at once. Only warm when the source just changed
+    // or we're within preloadLookahead seconds of the current clip's end.
+    if (winningTrackId) {
+      const track = videoTracks.find((tr) => tr.id === winningTrackId);
+      const next = track ? nextVideoClipAfter(track, t) : null;
+      if (next?.src) {
+        const clipEndFrame = active.clip.timelineStart + active.clip.duration;
+        const secToEnd = framesToSeconds(clipEndFrame - t, this.fps);
+        if (srcChanged || secToEnd <= this.preloadLookahead) {
+          this.pool.preload(next.src, framesToSeconds(next.sourceIn, this.fps));
+        }
+      }
+    }
 
     // Audio mix (audio-only) : fade ramp × clip gain (dB → multiplier).
     // Opacity is not touched — video fades are a separate feature.
