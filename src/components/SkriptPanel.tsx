@@ -46,14 +46,21 @@ export default function SkriptPanel({ onPlanLaden, toast }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const say = useCallback((m: string, a: "ok" | "err" | "info" = "info", ms = 2500) => toast?.(m, a, ms), [toast]);
 
+  // Bis das Drehbuch zum ersten Mal vom Server geholt ist, zeigt die Ansicht „Lädt …“
+  // statt der Upload-Aufforderung. Sonst blitzt auf einem langsamen Server kurz
+  // „Drehbuch hochladen“ auf, obwohl längst eines vorhanden ist.
+  const [erstesLaden, setErstesLaden] = useState(true);
+
   const laden = useCallback(async () => {
     try {
       const d = await fetchSkript(); setSkript(d.skript); setStory(d.story);
+      setErstesLaden(false);
       if (d.skript && !aktSzene) setAktSzene(d.skript.szenen[0]?.id ?? null);
       const t = await fetchKontextTakes(); setTakes(t.takes);
       const p = await fetchSchnittplaene(); setPlaene(p);
       const g = await fetchGesichter(); setGesichter(g);
     } catch { /* Backend offline */ }
+    finally { setErstesLaden(false); }
   }, [aktSzene]);
   useEffect(() => { void laden(); }, [laden]);
 
@@ -133,6 +140,17 @@ export default function SkriptPanel({ onPlanLaden, toast }: Props) {
   const szene = skript?.szenen.find((s) => s.id === aktSzene) ?? null;
   const takesDerSzene = szene ? takes.filter((t) => t.skript_szene_id === szene.id) : [];
   const zugeordnet = takes.filter((t) => t.skript_szene_id).length;
+
+  // ── Ladezustand: erste Antwort des Backends steht noch aus ──
+  if (erstesLaden && !skript) {
+    return (
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, color: "#8a8a8a" }}>
+        <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#b9d94a" strokeWidth={2.2} strokeLinecap="round" strokeDasharray="14 42" style={{ animation: "spin 0.9s linear infinite" }}><circle cx="12" cy="12" r="9" /></svg>
+        <div style={{ fontSize: 15 }}>Skript &amp; Kontext wird geladen …</div>
+        <div style={{ fontSize: 12, opacity: 0.8 }}>Drehbuch, Szenen und Take-Zuordnungen werden vom Server geholt.</div>
+      </div>
+    );
+  }
 
   // ── Start-Zustand: kein Skript ──
   if (!skript) {
