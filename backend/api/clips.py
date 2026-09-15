@@ -8,6 +8,7 @@ GET  /api/clips/{clip_id}/analyse → Analyse-Ergebnisse (Szenen, Transkription)
 DELETE /api/clips/{clip_id}    → Clip löschen
 """
 
+import asyncio
 import os
 import shutil
 import uuid
@@ -205,6 +206,15 @@ async def clips_auflisten(db: AsyncSession = Depends(get_db)):
     )
     clips = result.scalars().all()
 
+    # Die Antwort pro Clip macht mehrere synchrone Dateisystem-Prüfungen
+    # (_nonempty/.exists für Proxy, Waveform, Strip). Bei ~60 Clips sind das
+    # Hunderte os.stat-Aufrufe. In einem async-Handler blockieren die den
+    # EINEN Event-Loop von uvicorn: mehrere gleichzeitige Anfragen (der Editor
+    # feuert beim Laden parallel clips+ordner+projekt) serialisieren sich dann
+    # auf 20–30 s, einzelne laufen in den Timeout → aus Gastsicht „Backend geht
+    # nicht“. Alle relationalen Felder sind per selectinload bereits geladen,
+    # also darf der Aufbau gefahrlos in einen Thread ausgelagert werden; der
+    # Loop bleibt frei für die übrigen Anfragen.
     def _sync_info(clip):
         t = clip.take
         if not t:
@@ -220,8 +230,8 @@ async def clips_auflisten(db: AsyncSession = Depends(get_db)):
                     "methode": links[0].methode, "konfidenz": links[0].konfidenz} if links else None,
         }
 
-    return [
-        {
+    def _clip_dict(clip):
+        return {
             "id": str(clip.id),
             "dateiname": clip.dateiname,
             "quelle": clip.quelle,
@@ -256,8 +266,10 @@ async def clips_auflisten(db: AsyncSession = Depends(get_db)):
             "take_id": str(clip.take_id) if clip.take_id else None,
             "sync": _sync_info(clip),
         }
-        for clip in clips
-    ]
+
+    # Aufbau (inkl. der blockierenden Dateisystem-Prüfungen) im Thread, damit der
+    # Event-Loop frei bleibt und parallele Anfragen sich nicht serialisieren.
+    return await asyncio.to_thread(lambda: [_clip_dict(clip) for clip in clips])
 
 
 def _clip_medien_felder(clip: Clip) -> dict:

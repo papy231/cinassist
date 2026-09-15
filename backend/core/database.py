@@ -14,11 +14,24 @@ from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker, backref
 from backend.core.config import DATABASE_URL, DATABASE_URL_SYNC
 
 # ─── Async Engine ────────────────────────────────────────
-async_engine = create_async_engine(DATABASE_URL, echo=False, pool_size=10)
+# pool_size + max_overflow: Beim Öffnen des Editors feuert die Oberfläche viele
+# parallele Anfragen (projekt, ordner, clips …); gleichzeitig arbeitet der Worker.
+# Mit dem alten Wert (10 + Default-Overflow 10 = 20) lief der Pool bei mehreren
+# Nutzern voll → „QueuePool limit reached, connection timed out“ → 500 → aus Sicht
+# des Gastes „Backend geht nicht“. pool_pre_ping wirft tote Verbindungen weg,
+# pool_recycle beugt von der DB serverseitig gekappten Leerlaufverbindungen vor.
+async_engine = create_async_engine(
+    DATABASE_URL, echo=False,
+    pool_size=20, max_overflow=30, pool_timeout=15,
+    pool_pre_ping=True, pool_recycle=1800,
+)
 AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
 # ─── Sync Engine (für Celery Worker) ────────────────────
-sync_engine = create_engine(DATABASE_URL_SYNC, echo=False, pool_size=5)
+sync_engine = create_engine(
+    DATABASE_URL_SYNC, echo=False,
+    pool_size=5, max_overflow=10, pool_pre_ping=True, pool_recycle=1800,
+)
 SyncSessionLocal = sessionmaker(bind=sync_engine)
 
 
